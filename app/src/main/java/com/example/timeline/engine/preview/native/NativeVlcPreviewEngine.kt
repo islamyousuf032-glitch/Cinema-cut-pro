@@ -112,7 +112,7 @@ class NativeVlcPreviewEngine(
         pauseAfterFrameRunnable = runnable
         // Vout reports a configured video output, not necessarily a presented frame. Give the
         // decoder a short window to submit one before holding the frame for paused grading/UI.
-        mainHandler.postDelayed(runnable, 180L)
+        mainHandler.postDelayed(runnable, 350L)
     }
 
     private fun cancelPauseAfterFirstFrame() {
@@ -204,7 +204,10 @@ class NativeVlcPreviewEngine(
     }
 
     override fun pause() {
-        cancelPauseAfterFirstFrame()
+        // LibVLC must briefly run to decode and submit a frame for a paused preview. The initial
+        // Compose playback-state effect calls pause() as soon as the screen is composed; pausing
+        // here used to cancel the first-frame handoff and leave the viewport black/stale.
+        if (pauseAfterFirstFrame) return
         mediaPlayer?.pause()
     }
 
@@ -258,5 +261,5 @@ class NativeVlcPreviewEngine(
         get() = (mediaPlayer?.length ?: 0L) * 1000
 
     override val isPlaying: Boolean
-        get() = mediaPlayer?.isPlaying == true
+        get() = mediaPlayer?.isPlaying == true && !pauseAfterFirstFrame
 }
