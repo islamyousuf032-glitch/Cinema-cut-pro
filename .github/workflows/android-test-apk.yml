@@ -40,7 +40,48 @@ jobs:
         uses: gradle/actions/setup-gradle@v6.4.0
 
       - name: Build debug APK and run JVM tests
-        run: ./gradlew --no-daemon --stacktrace :app:assembleDebug :app:testDebugUnitTest
+        shell: bash
+        run: |
+          set -o pipefail
+          ./gradlew --no-daemon --stacktrace :app:assembleDebug :app:testDebugUnitTest 2>&1 | tee gradle-build.log
+
+      - name: Surface Gradle failure details
+        if: failure()
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          log = Path("gradle-build.log")
+          if not log.exists():
+              raise SystemExit(0)
+          lines = log.read_text(errors="replace").splitlines()
+          pattern = re.compile(
+              r"FAILURE:|What went wrong:|Execution failed for task|"
+              r"Caused by:|Could not resolve|Unresolved reference|"
+              r"^e: |error:|Internal error|Exception is:|BUILD FAILED",
+              re.IGNORECASE,
+          )
+          matches = [line for line in lines if pattern.search(line)]
+          excerpt = matches[-35:] if matches else lines[-60:]
+          report = "Gradle build failure details:\n\n```text\n" + "\n".join(excerpt) + "\n```\n"
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write(report)
+          message = "\n".join(excerpt)
+          message = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+          print(f"::error title=Gradle build failure::{message}")
+          PY
+
+      - name: Upload Gradle log on failure
+        if: failure()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: cinema-cut-pro-gradle-log-${{ github.run_number }}-${{ github.run_attempt }}
+          path: gradle-build.log
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Run native C++ host tests
         run: python3 tools/run_native_export_tests.py
