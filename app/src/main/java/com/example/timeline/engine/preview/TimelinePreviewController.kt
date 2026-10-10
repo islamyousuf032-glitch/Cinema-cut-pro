@@ -109,7 +109,7 @@ class TimelinePreviewController(private val context: Context) {
                 val sourcePositionMs = sourcePositionUs / 1000
                 val (playableUri, useProxy) = PreviewSourceResolver.resolvePlayableUri(asset, preferProxy = true)
                     .let { (uri, isProxy) -> uri to isProxy }
-                val evaluatedParams = GradeEvaluationEngine.evaluateFrame(activeProject!!, lastPlayheadFrame)
+                val evaluatedParams = com.example.timeline.engine.GradeEvaluationEngine.evaluateFrame(activeProject!!, lastPlayheadFrame)
                 
                 if (!playableUri.isNullOrBlank()) {
                     newEngine.loadMedia(playableUri, useProxy, sourcePositionMs, evaluatedParams, sourcePositionUs)
