@@ -41,6 +41,11 @@ uint8_t* directBytes(JNIEnv* env, jobject buffer, jlong minimumCapacity) {
     return static_cast<uint8_t*>(env->GetDirectBufferAddress(buffer));
 }
 
+void throwIllegalArgumentException(JNIEnv* env, const char* message) {
+    jclass exceptionClass = env->FindClass("java/lang/IllegalArgumentException");
+    if (exceptionClass != nullptr) env->ThrowNew(exceptionClass, message);
+}
+
 } // namespace
 
 extern "C" JNIEXPORT jboolean JNICALL
@@ -92,6 +97,39 @@ Java_com_example_timeline_export_native_NativeExportCore_nativeApplyColor(
     if (pixels == nullptr) return;
     RenderFrame frame{pixels, width, height, width * 4, 0};
     ColorEval::applyColorAdjustments(frame, exposure, brightness, contrast, saturation);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_example_timeline_export_native_NativeExportCore_nativeApplyClipAdjustments(
+    JNIEnv* env, jobject, jobject buffer, jint width, jint height, jfloatArray values) {
+    constexpr jsize kAdjustmentCount = 8;
+    const jlong capacity = rgbaCapacity(width, height);
+    uint8_t* pixels = directBytes(env, buffer, capacity);
+    if (pixels == nullptr) {
+        throwIllegalArgumentException(env, "Clip-adjustment frame must be a complete direct RGBA buffer.");
+        return;
+    }
+    if (values == nullptr || env->GetArrayLength(values) != kAdjustmentCount) {
+        throwIllegalArgumentException(env, "Clip-adjustment parameters must contain exactly eight values.");
+        return;
+    }
+
+    jfloat parameters[kAdjustmentCount];
+    env->GetFloatArrayRegion(values, 0, kAdjustmentCount, parameters);
+    if (env->ExceptionCheck()) return;
+
+    const ClipColorAdjustments adjustments{
+        parameters[0], // exposure stops
+        parameters[1], // brightness
+        parameters[2], // contrast
+        parameters[3], // saturation
+        parameters[4], // vibrance
+        parameters[5], // temperature
+        parameters[6], // tint
+        parameters[7]  // combined sharpness, clarity and structure
+    };
+    RenderFrame frame{pixels, width, height, width * 4, 0};
+    ColorEval::applyClipAdjustments(frame, adjustments);
 }
 
 extern "C" JNIEXPORT void JNICALL

@@ -21,6 +21,7 @@ object NativeExportCore {
     external fun nativeEvaluateFramePlan(frameIndex: Long): Boolean
     external fun nativeApplyTransform(buffer: ByteBuffer, width: Int, height: Int, scaleX: Float, scaleY: Float, rotation: Float, posX: Float, posY: Float, opacity: Float)
     external fun nativeApplyColor(buffer: ByteBuffer, width: Int, height: Int, exposure: Float, brightness: Float, contrast: Float, saturation: Float)
+    external fun nativeApplyClipAdjustments(buffer: ByteBuffer, width: Int, height: Int, parameters: FloatArray)
     external fun nativeApplyLut(buffer: ByteBuffer, width: Int, height: Int, lutBuffer: ByteBuffer, lutSize: Int)
     external fun nativeCompositeFrame(bgBuffer: ByteBuffer, fgBuffer: ByteBuffer, width: Int, height: Int, blendMode: Int)
     external fun nativeBlendWatermarkYuv(yuvBuffer: ByteBuffer, watermarkRgbaBuffer: ByteBuffer, width: Int, height: Int)

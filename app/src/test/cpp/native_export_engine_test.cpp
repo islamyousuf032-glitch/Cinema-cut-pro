@@ -92,6 +92,78 @@ void testColorAndLut() {
     expect(lutPixel[3] == 44, "LUT preserves alpha");
 }
 
+void testMedia3ClipColorAdjustments() {
+    std::array<uint8_t, 4> exposurePixel{64, 128, 192, 77};
+    RenderFrame exposureFrame{exposurePixel.data(), 1, 1, 4, 0};
+    ClipColorAdjustments exposure;
+    exposure.exposureStops = 1.0f;
+    ColorEval::applyClipAdjustments(exposureFrame, exposure);
+    expect(exposurePixel[0] == 128 && exposurePixel[1] == 255 && exposurePixel[2] == 255,
+           "clip exposure is applied");
+    expect(exposurePixel[3] == 77, "clip exposure preserves alpha");
+
+    std::array<uint8_t, 4> brightnessPixel{0, 0, 0, 255};
+    RenderFrame brightnessFrame{brightnessPixel.data(), 1, 1, 4, 0};
+    ClipColorAdjustments brightness;
+    brightness.brightness = 0.5f;
+    ColorEval::applyClipAdjustments(brightnessFrame, brightness);
+    expect(brightnessPixel[0] == 26 && brightnessPixel[1] == 26 && brightnessPixel[2] == 26,
+           "clip brightness is applied");
+
+    std::array<uint8_t, 4> contrastPixel{64, 128, 192, 255};
+    RenderFrame contrastFrame{contrastPixel.data(), 1, 1, 4, 0};
+    ClipColorAdjustments contrast;
+    contrast.contrast = 0.5f;
+    ColorEval::applyClipAdjustments(contrastFrame, contrast);
+    expect(contrastPixel[0] < 64 && contrastPixel[1] == 128 && contrastPixel[2] > 192,
+           "clip contrast adjusts the range around middle gray");
+
+    std::array<uint8_t, 4> whiteBalancePixel{100, 100, 100, 91};
+    RenderFrame whiteBalanceFrame{whiteBalancePixel.data(), 1, 1, 4, 0};
+    ClipColorAdjustments whiteBalance;
+    whiteBalance.temperature = 1.0f;
+    whiteBalance.tint = 1.0f;
+    ColorEval::applyClipAdjustments(whiteBalanceFrame, whiteBalance);
+    expect(whiteBalancePixel[0] == 120 && whiteBalancePixel[1] == 120 && whiteBalancePixel[2] == 100,
+           "temperature and tint are applied");
+    expect(whiteBalancePixel[3] == 91, "temperature and tint preserve alpha");
+
+    std::array<uint8_t, 4> saturationPixel{50, 100, 200, 255};
+    RenderFrame saturationFrame{saturationPixel.data(), 1, 1, 4, 0};
+    ClipColorAdjustments saturation;
+    saturation.saturation = 0.0f;
+    ColorEval::applyClipAdjustments(saturationFrame, saturation);
+    expect(std::abs(static_cast<int>(saturationPixel[0]) - saturationPixel[1]) <= 1 &&
+           std::abs(static_cast<int>(saturationPixel[1]) - saturationPixel[2]) <= 1,
+           "zero clip saturation creates a grayscale pixel");
+
+    std::array<uint8_t, 4> vibrancePixel{60, 100, 140, 255};
+    RenderFrame vibranceFrame{vibrancePixel.data(), 1, 1, 4, 0};
+    ClipColorAdjustments vibrance;
+    vibrance.vibrance = 1.0f;
+    ColorEval::applyClipAdjustments(vibranceFrame, vibrance);
+    expect(vibrancePixel[0] < 60 && vibrancePixel[2] > 140,
+           "vibrance increases color separation while preserving neutral luma");
+
+    std::array<uint8_t, 3 * 3 * 4> detailPixels{};
+    for (size_t offset = 0; offset < detailPixels.size(); offset += 4) {
+        detailPixels[offset] = 100;
+        detailPixels[offset + 1] = 100;
+        detailPixels[offset + 2] = 100;
+        detailPixels[offset + 3] = 255;
+    }
+    detailPixels[(4 * 4)] = 180;
+    detailPixels[(4 * 4) + 1] = 180;
+    detailPixels[(4 * 4) + 2] = 180;
+    RenderFrame detailFrame{detailPixels.data(), 3, 3, 12, 0};
+    ClipColorAdjustments detail;
+    detail.detailAmount = 0.5f;
+    ColorEval::applyClipAdjustments(detailFrame, detail);
+    expect(detailPixels[4 * 4] == 216, "mid-detail sharpens local contrast");
+    expect(detailPixels[3] == 255 && detailPixels[(4 * 4) + 3] == 255,
+           "mid-detail preserves alpha and leaves border pixels unchanged");
+}
+
 void testAffineTransform() {
     std::array<uint8_t, 12> pixels{
         10, 0, 0, 255,
@@ -120,6 +192,7 @@ int main() {
         testRgbaCompositing();
         testRgbaToI420AndWatermark();
         testColorAndLut();
+        testMedia3ClipColorAdjustments();
         testAffineTransform();
         testAudioMixing();
         std::cout << "Native export engine tests passed.\n";

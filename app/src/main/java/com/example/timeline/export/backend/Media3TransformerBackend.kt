@@ -6,6 +6,7 @@ import android.media.MediaFormat
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import androidx.media3.common.Effect
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.util.UnstableApi
@@ -20,7 +21,6 @@ import androidx.media3.transformer.ExportResult
 import androidx.media3.transformer.ProgressHolder
 import androidx.media3.transformer.Transformer
 import androidx.media3.transformer.VideoEncoderSettings
-import com.example.model.adjustments.AdjustmentStack
 import com.example.model.adjustments.VideoAdjustmentParams
 import com.example.model.colorgrade.ColorGradeLayerStack
 import com.example.model.colorgrade.ColorGradeParams
@@ -50,6 +50,7 @@ import com.example.timeline.export.model.ExportJobStatus
 import com.example.timeline.export.model.ExportProgress
 import com.example.timeline.export.model.ExportSettings
 import com.example.timeline.export.model.ExportValidationResult
+import com.example.timeline.export.native.NativeExportCore
 import com.example.timeline.media.FrameRate
 import com.example.timeline.media.MediaAsset
 import kotlinx.coroutines.CancellationException
@@ -94,7 +95,8 @@ class Media3TransformerBackend(context: Context) : ExportBackend {
         val startPositionUs: Long,
         val endPositionUs: Long,
         val outputFrameCount: Long,
-        val includeAudio: Boolean
+        val includeAudio: Boolean,
+        val adjustmentParams: VideoAdjustmentParams?
     )
 
     private data class ActiveExport(
@@ -202,20 +204,19 @@ class Media3TransformerBackend(context: Context) : ExportBackend {
                         .build()
                 )
                 .build()
-            val editedItem = EditedMediaItem.Builder(sourceItem)
-                .setRemoveAudio(!plan.includeAudio)
-                .setEffects(
-                    Effects(
-                        emptyList(),
-                        listOf(
-                            Presentation.createForWidthAndHeight(
-                                job.settings.resolutionWidth,
-                                job.settings.resolutionHeight,
-                                Presentation.LAYOUT_SCALE_TO_FIT
-                            )
-                        )
+            val videoEffects = buildList<Effect> {
+                plan.adjustmentParams?.let { add(createMedia3ClipAdjustmentEffect(it)) }
+                add(
+                    Presentation.createForWidthAndHeight(
+                        job.settings.resolutionWidth,
+                        job.settings.resolutionHeight,
+                        Presentation.LAYOUT_SCALE_TO_FIT
                     )
                 )
+            }
+            val editedItem = EditedMediaItem.Builder(sourceItem)
+                .setRemoveAudio(!plan.includeAudio)
+                .setEffects(Effects(emptyList(), videoEffects))
                 .build()
 
             val videoBitrateMode = when (job.settings.bitrateMode) {
@@ -457,9 +458,13 @@ class Media3TransformerBackend(context: Context) : ExportBackend {
             if (clip.volume != 1f && !track.isMuted) {
                 errors += "Per-clip volume changes are not supported by this export path yet."
             }
-            if (hasEnabledAdjustment(clip.adjustments)) {
-                errors += "Clip adjustments are not supported by this export path yet."
-            }
+            val adjustmentStack = clip.adjustments
+            val nativeAdjustmentEngineAvailable =
+                !Media3ClipAdjustmentSupport.hasRenderableAdjustments(adjustmentStack) || NativeExportCore.isAvailable()
+            errors += Media3ClipAdjustmentSupport.validationErrors(
+                adjustmentStack,
+                nativeEngineAvailable = nativeAdjustmentEngineAvailable
+            )
             if (hasEnabledGrade(clip.colorGrade) || hasEnabledColorLayers(clip.colorLayers)) {
                 errors += "Clip color grades and LUT layers are not supported by this export path yet."
             }
@@ -532,7 +537,11 @@ class Media3TransformerBackend(context: Context) : ExportBackend {
             .filter { it.type == TrackType.VIDEO && it.isVisible }
             .flatMap { track -> track.clips.filter { it.isEnabled }.map { track to it } }
             .singleOrNull()
-        val asset = activePair?.second?.let { clip -> project.mediaAssets.firstOrNull { it.assetId == clip.mediaId } }
+        val activeClip = activePair?.second
+        if (activeClip != null && Media3ClipAdjustmentSupport.hasRenderableAdjustments(activeClip.adjustments)) {
+            warnings += "Clip color adjustments use native CPU frame processing and can increase export time, especially at high resolution."
+        }
+        val asset = activeClip?.let { clip -> project.mediaAssets.firstOrNull { it.assetId == clip.mediaId } }
         if (asset?.metadata?.exactFrameRate == null && asset?.metadata?.estimatedFrameRate != null) {
             warnings += "The source frame rate is estimated from import metadata; verify the source is constant-frame-rate."
         }
@@ -564,7 +573,10 @@ class Media3TransformerBackend(context: Context) : ExportBackend {
             startPositionUs = startUs,
             endPositionUs = endUs,
             outputFrameCount = outputFrames,
-            includeAudio = includeAudio
+            includeAudio = includeAudio,
+            adjustmentParams = timelineClip.adjustments.params.takeIf {
+                Media3ClipAdjustmentSupport.hasRenderableAdjustments(timelineClip.adjustments)
+            }
         )
     }
 
@@ -608,10 +620,6 @@ class Media3TransformerBackend(context: Context) : ExportBackend {
             }.getOrDefault(false)
         }
     }
-
-    private fun hasEnabledAdjustment(stack: AdjustmentStack): Boolean = stack.enabled &&
-        (stack.params != VideoAdjustmentParams.default() || stack.keyframes.isNotEmpty() ||
-            stack.blendMode != "NORMAL" || stack.opacity != 1f)
 
     private fun hasEnabledGrade(grade: ColorGradeStack): Boolean = grade.enabled &&
         (grade.opacity != 1f || grade.blendMode != "NORMAL" || grade.keyframes.isNotEmpty() ||
