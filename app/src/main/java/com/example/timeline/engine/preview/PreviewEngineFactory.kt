@@ -9,6 +9,10 @@ object PreviewEngineFactory {
         when (targetType) {
             PreviewEngineType.FFMPEG_NATIVE,
             PreviewEngineType.VLC_NATIVE -> {
+                if (isRunningUnderRobolectric(context)) {
+                    android.util.Log.d("PreviewEngineFactory", "Using Media3 in Robolectric; native LibVLC is not loaded in JVM tests")
+                    return com.example.timeline.engine.preview.Media3FallbackPreviewEngine(context)
+                }
                 val nativeEngine = createLibVlcEngine(context, targetType)
                 if (nativeEngine != null) return nativeEngine
                 android.util.Log.w("PreviewEngineFactory", "FFmpeg/LibVLC unavailable; falling back to Media3")
@@ -31,6 +35,10 @@ object PreviewEngineFactory {
         
         return StillFramePreviewEngine(context)
     }
+
+    private fun isRunningUnderRobolectric(context: Context): Boolean = runCatching {
+        Class.forName("org.robolectric.RobolectricTestRunner", false, context.classLoader)
+    }.isSuccess
 
     private fun createLibVlcEngine(context: Context, type: PreviewEngineType): PreviewEngine? {
         val engine = runCatching {
