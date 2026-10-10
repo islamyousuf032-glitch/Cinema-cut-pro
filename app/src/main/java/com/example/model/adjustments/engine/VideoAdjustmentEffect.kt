@@ -7,7 +7,7 @@ import androidx.media3.effect.GlShaderProgram
 import com.example.model.adjustments.VideoAdjustmentParams
 
 class VideoAdjustmentEffect(
-    var currentParams: VideoAdjustmentParams = VideoAdjustmentParams.default()
+    @Volatile var currentParams: VideoAdjustmentParams = VideoAdjustmentParams.default()
 ) : GlEffect {
 
     override fun toGlShaderProgram(context: Context, useHdr: Boolean): GlShaderProgram {

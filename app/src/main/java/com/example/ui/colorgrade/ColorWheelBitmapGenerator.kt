@@ -6,7 +6,13 @@ import kotlin.math.atan2
 import kotlin.math.hypot
 
 object ColorWheelBitmapGenerator {
-    fun generateCpuBitmap(size: Int): Bitmap {
+    private val bitmapCache = object : android.util.LruCache<Int, Bitmap>(4) {}
+
+    fun generateCpuBitmap(size: Int): Bitmap = synchronized(bitmapCache) {
+        bitmapCache.get(size) ?: createCpuBitmap(size).also { bitmapCache.put(size, it) }
+    }
+
+    private fun createCpuBitmap(size: Int): Bitmap {
         val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
         val center = size / 2f
         val radius = size / 2f

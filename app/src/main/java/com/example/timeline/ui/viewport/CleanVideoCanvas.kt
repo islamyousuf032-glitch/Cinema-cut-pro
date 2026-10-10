@@ -84,10 +84,13 @@ fun CleanVideoCanvas(
         ) {
             if (currentAsset != null && currentClip != null) {
                 val isReady = playerState == com.example.timeline.engine.preview.PreviewState.READY || playerState == com.example.timeline.engine.preview.PreviewState.PLAYING
-                val needsStillFrame = currentAsset.proxyStatus == ProxyStatus.GENERATING || 
-                                      currentAsset.proxyStatus == ProxyStatus.REQUIRED ||
-                                      currentAsset.previewStatus == PreviewStatus.DIRECT_FAILED_RUNTIME ||
-                                      (!isReady && playerError != null)
+                val requiresProxy = currentAsset.proxyStatus == ProxyStatus.REQUIRED ||
+                    currentAsset.previewStatus == PreviewStatus.PROXY_REQUIRED ||
+                    currentAsset.previewStatus == PreviewStatus.UNSUPPORTED ||
+                    currentAsset.previewStatus == PreviewStatus.STILL_FRAME_ONLY
+                val needsStillFrame = (requiresProxy && currentAsset.proxyStatus != ProxyStatus.READY) ||
+                    currentAsset.previewStatus == PreviewStatus.DIRECT_FAILED_RUNTIME ||
+                    (!isReady && playerError != null)
                 
                 val hasProxy = currentAsset.proxyStatus == ProxyStatus.READY
                 val isDirectFailed = currentAsset.previewStatus == PreviewStatus.DIRECT_FAILED_RUNTIME || (hasProxy && currentAsset.previewStatus == PreviewStatus.NOT_TESTED)

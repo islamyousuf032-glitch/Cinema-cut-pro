@@ -107,11 +107,13 @@ class TimelinePreviewController(private val context: Context) {
                 val sourceFrame = TimelineFrameResolver.resolveSourceFrame(lastPlayheadFrame, clip)
                 val sourcePositionUs = TimelineFrameResolver.convertFrameToMicroseconds(sourceFrame, rat.numerator, rat.denominator)
                 val sourcePositionMs = sourcePositionUs / 1000
-                val path = asset.localOriginalUriString ?: asset.originalUriString
-                val uri = android.net.Uri.parse(path)
-                val evaluatedParams = clip.adjustments.evaluateParamsAtFrame(lastPlayheadFrame)
+                val (playableUri, useProxy) = PreviewSourceResolver.resolvePlayableUri(asset, preferProxy = true)
+                    .let { (uri, isProxy) -> uri to isProxy }
+                val evaluatedParams = GradeEvaluationEngine.evaluateFrame(activeProject!!, lastPlayheadFrame)
                 
-                newEngine.loadMedia(uri.toString(), false, sourcePositionMs, evaluatedParams, sourcePositionUs)
+                if (!playableUri.isNullOrBlank()) {
+                    newEngine.loadMedia(playableUri, useProxy, sourcePositionMs, evaluatedParams, sourcePositionUs)
+                }
             }
             // Once ready, switch
             previewEngine = newEngine
@@ -185,22 +187,16 @@ class TimelinePreviewController(private val context: Context) {
 
         val evaluatedParams = com.example.timeline.engine.GradeEvaluationEngine.evaluateFrame(project, playheadFrame)
 
-        // Browser engine can use file directly if allowed, but to be sure, let's prefer object blob if possible,
-        // or just file:// local path
-        val useBrowserUri = previewEngine.engineType == PreviewEngineType.BROWSER
-        // If native, must use local path
-        val useNativeUri = previewEngine.engineType == PreviewEngineType.NATIVE_CPP || previewEngine.engineType == PreviewEngineType.VLC_NATIVE
-        
-        var uriToUse = asset.originalUriString
-        if ((useNativeUri || useBrowserUri) && asset.localOriginalUriString != null) {
-            uriToUse = asset.localOriginalUriString!!
-        }
+        // Prefer a ready proxy for editor playback. The proxy is generated at a predictable
+        // preview resolution and retains the source frame rate, so timeline timecode/audio sync
+        // continue to use the same source-time mapping.
+        val (uriToUse, useProxy) = PreviewSourceResolver.resolvePlayableUri(asset, preferProxy = true)
 
-        if (uriToUse.isEmpty()) {
+        if (uriToUse.isNullOrBlank()) {
             val eng = previewEngine
             if (eng is Media3FallbackPreviewEngine) eng.clearMedia()
         } else {
-            previewEngine.loadMedia(uriToUse, false, sourcePositionMs, evaluatedParams, sourcePositionUs)
+            previewEngine.loadMedia(uriToUse, useProxy, sourcePositionMs, evaluatedParams, sourcePositionUs)
         }
     }
 

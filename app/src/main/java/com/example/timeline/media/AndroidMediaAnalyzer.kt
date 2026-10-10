@@ -27,6 +27,7 @@ class AndroidMediaAnalyzer(
 
         val videoStreams = mutableListOf<VideoStreamInfo>()
         val audioStreams = mutableListOf<AudioStreamInfo>()
+        var firstVideoTrackIndex: Int? = null
 
         try {
             retriever.setDataSource(context, uri)
@@ -47,6 +48,7 @@ class AndroidMediaAnalyzer(
                 val trackMime = format.getString(MediaFormat.KEY_MIME) ?: ""
 
                 if (trackMime.startsWith("video/")) {
+                    if (firstVideoTrackIndex == null) firstVideoTrackIndex = i
                     width = format.getIntegerSafely(MediaFormat.KEY_WIDTH, 0)
                     height = format.getIntegerSafely(MediaFormat.KEY_HEIGHT, 0)
 
@@ -125,9 +127,12 @@ class AndroidMediaAnalyzer(
                 }
             }
             
-            // Very simple variable frame rate check - normally requires demuxer probing
-            // Let's assume false for simple use-cases unless we can reliably detect
-            val isVariableFrameRate = false
+            // Probe presentation timestamps from the selected video track. This does not decode
+            // frames, and the bounded sample avoids making media import wait on a full scan.
+            val isVariableFrameRate = firstVideoTrackIndex?.let { trackIndex ->
+                val timestampSamples = sampleVideoPresentationTimeSegments(extractor, trackIndex, durationUs)
+                VariableFrameRateDetector.isVariableFrameRateSegments(timestampSamples)
+            } ?: false
 
             val analysisResult = MediaAnalysisResult(
                 durationUs = durationUs,
@@ -159,6 +164,7 @@ class AndroidMediaAnalyzer(
                 audioStreams = audioStreams,
                 hasVideo = hasVideo,
                 hasAudio = hasAudio,
+                isVariableFrameRate = isVariableFrameRate,
                 estimatedFrameRate = finalFrameRate
             )
 
@@ -191,10 +197,54 @@ class AndroidMediaAnalyzer(
         }
     }
 
+    private fun sampleVideoPresentationTimeSegments(
+        extractor: MediaExtractor,
+        videoTrackIndex: Int,
+        durationUs: Long
+    ): List<List<Long>> {
+        val seekPointsUs = if (durationUs > 0L) {
+            listOf(0L, durationUs / 2L, (durationUs - VFR_TAIL_WINDOW_US).coerceAtLeast(0L)).distinct()
+        } else {
+            listOf(0L)
+        }
+        val sampleLimit = if (seekPointsUs.size == 1) MAX_VFR_SAMPLE_COUNT else VFR_SAMPLES_PER_SEGMENT
+        val segments = mutableListOf<List<Long>>()
+        var selectedTrack = false
+
+        try {
+            extractor.selectTrack(videoTrackIndex)
+            selectedTrack = true
+            seekPointsUs.forEach { seekPointUs ->
+                extractor.seekTo(seekPointUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
+                val segment = ArrayList<Long>(sampleLimit)
+                while (segment.size < sampleLimit) {
+                    val sampleTrackIndex = extractor.sampleTrackIndex
+                    val sampleTimeUs = extractor.sampleTime
+                    if (sampleTrackIndex < 0 || sampleTimeUs < 0L) break
+                    if (sampleTrackIndex == videoTrackIndex) segment += sampleTimeUs
+                    if (!extractor.advance()) break
+                }
+                if (segment.isNotEmpty()) segments += segment
+            }
+        } catch (error: Exception) {
+            android.util.Log.w("AndroidMediaAnalyzer", "Could not sample video timestamps for VFR detection", error)
+            return emptyList()
+        } finally {
+            if (selectedTrack) runCatching { extractor.unselectTrack(videoTrackIndex) }
+        }
+        return segments
+    }
+
     private fun MediaFormat.getIntegerSafely(key: String, default: Int): Int {
         return try { getInteger(key) } catch(e: Exception) { default }
     }
     private fun MediaFormat.getLongSafely(key: String, default: Long): Long {
         return try { getLong(key) } catch(e: Exception) { default }
+    }
+
+    private companion object {
+        const val MAX_VFR_SAMPLE_COUNT = 180
+        const val VFR_SAMPLES_PER_SEGMENT = 60
+        const val VFR_TAIL_WINDOW_US = 2_000_000L
     }
 }

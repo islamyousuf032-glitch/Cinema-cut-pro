@@ -183,11 +183,8 @@ class TimelineViewModel(context: Context) : ViewModel() {
                             addClipFromMedia(finalAsset)
                         }
                         
-                        if (finalAsset.proxyStatus == ProxyStatus.RECOMMENDED || finalAsset.proxyStatus == ProxyStatus.REQUIRED) {
-                            // If user settings say auto-proxy, we'd do it here. Or if it's explicitly REQUIRED, maybe do it automatically.
-                            if (finalAsset.proxyStatus == ProxyStatus.REQUIRED) {
-                                generateProxyForAsset(finalAsset)
-                            }
+                        if (finalAsset.proxyStatus == ProxyStatus.REQUIRED) {
+                            generateProxy(finalAsset.assetId)
                         }
                     }
                 }
@@ -224,6 +221,24 @@ class TimelineViewModel(context: Context) : ViewModel() {
         }
     }
     
+    private fun proxyDimensions(sourceWidth: Int, sourceHeight: Int): Pair<Int, Int> {
+        if (sourceWidth <= 0 || sourceHeight <= 0) return sourceWidth to sourceHeight
+        val maxSide = 1280
+        if (sourceWidth <= maxSide && sourceHeight <= maxSide) return sourceWidth to sourceHeight
+
+        return if (sourceWidth >= sourceHeight) {
+            val scaledHeight = (sourceHeight.toFloat() / sourceWidth * maxSide).toInt().let { height ->
+                if (height % 2 == 0) height else height - 1
+            }.coerceAtLeast(2)
+            maxSide to scaledHeight
+        } else {
+            val scaledWidth = (sourceWidth.toFloat() / sourceHeight * maxSide).toInt().let { width ->
+                if (width % 2 == 0) width else width - 1
+            }.coerceAtLeast(2)
+            scaledWidth to maxSide
+        }
+    }
+
     fun generateProxyForAsset(asset: MediaAsset) {
         val workId = importWorkManager.startProxyJob(asset)
         activeProxyJobs[asset.assetId] = workId
@@ -242,12 +257,13 @@ class TimelineViewModel(context: Context) : ViewModel() {
                             val stateNow = _uiState.value
                             val updatedAssets = stateNow.project.mediaAssets.map { m ->
                                 if (m.assetId == asset.assetId) {
+                                    val (proxyWidth, proxyHeight) = proxyDimensions(m.metadata.width, m.metadata.height)
                                     m.copy(
                                         proxyStatus = ProxyStatus.READY,
                                         proxyInfo = ProxyInfo(
                                             uriString = outputUri,
-                                            width = m.metadata.width,
-                                            height = m.metadata.height,
+                                            width = proxyWidth,
+                                            height = proxyHeight,
                                             frameRate = m.metadata.estimatedFrameRate?.fpsAsFloat ?: 30f,
                                             isProxyGenerated = true,
                                             proxyFormat = "mp4",
@@ -339,16 +355,15 @@ class TimelineViewModel(context: Context) : ViewModel() {
     }
     
     fun generateProxy(assetId: String) {
-        val asset = _uiState.value.project.mediaAssets.find { it.assetId == assetId }
-        if (asset != null) {
-            val pFinal = _uiState.value.project.copy(
-                mediaAssets = _uiState.value.project.mediaAssets.map {
-                    if (it.assetId == assetId) it.copy(proxyStatus = ProxyStatus.GENERATING) else it
-                }
-            )
-            updateState(pFinal)
-            generateProxyForAsset(asset)
-        }
+        val asset = _uiState.value.project.mediaAssets.find { it.assetId == assetId } ?: return
+        if (asset.proxyStatus == ProxyStatus.READY || asset.proxyStatus == ProxyStatus.GENERATING) return
+        val pFinal = _uiState.value.project.copy(
+            mediaAssets = _uiState.value.project.mediaAssets.map {
+                if (it.assetId == assetId) it.copy(proxyStatus = ProxyStatus.GENERATING) else it
+            }
+        )
+        updateState(pFinal)
+        generateProxyForAsset(asset)
     }
     
     fun cancelProxy(assetId: String) {

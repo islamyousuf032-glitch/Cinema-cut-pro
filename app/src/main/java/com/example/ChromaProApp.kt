@@ -31,8 +31,13 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.input.pointer.pointerInput
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.sample
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(
+    ExperimentalMaterial3Api::class,
+    kotlinx.coroutines.FlowPreview::class,
+    kotlinx.coroutines.ExperimentalCoroutinesApi::class
+)
 @Composable
 fun ChromaProApp(viewModel: MainViewModel = viewModel()) {
     val context = androidx.compose.ui.platform.LocalContext.current.applicationContext
@@ -71,6 +76,7 @@ fun ChromaProApp(viewModel: MainViewModel = viewModel()) {
     val editorViewModel: com.example.ui.editor.EditorViewModel = viewModel()
     
     val timelinePreviewController = remember { com.example.timeline.engine.preview.TimelinePreviewController(context) }
+    val previewActiveClip by timelinePreviewController.activeClip.collectAsState()
     
     androidx.compose.runtime.DisposableEffect(timelinePreviewController, timelineViewModel, editorViewModel) {
         timelinePreviewController.onPlayheadAdvanced = { newFrame ->
@@ -109,21 +115,28 @@ fun ChromaProApp(viewModel: MainViewModel = viewModel()) {
 
     var showExportDialog by remember { mutableStateOf(false) }
 
-    LaunchedEffect(playheadFrame, isPlaying, showScopes, timelineUiState.project) {
-        if (showScopes && timelineUiState.selectedClipId != null) {
-            val clipId = timelineUiState.selectedClipId
-            val track = timelineUiState.project.tracks.firstOrNull { it.clips.any { c -> c.id == clipId } }
-            val clip = track?.clips?.find { it.id == clipId }
-            val adjustments = clip?.adjustments ?: com.example.model.adjustments.AdjustmentStack("blank", com.example.model.adjustments.TargetType.CLIP, "blank")
-            
-            val bitmap = timelinePreviewController.extractCurrentFrameBitmap()
-            if (bitmap != null) {
-                scopeViewModel.analyzeFrame(
-                    bitmap, 
-                    adjustments.params, 
-                    com.example.model.adjustments.ColorPipelineSettings()
+    LaunchedEffect(showScopes) {
+        if (showScopes) {
+            androidx.compose.runtime.snapshotFlow {
+                ScopeAnalysisRequest(
+                    project = timelineUiState.project,
+                    playheadFrame = playheadFrame,
+                    clipId = previewActiveClip?.id ?: timelineUiState.selectedClipId
                 )
             }
+                .sample(100L)
+                .collect { request ->
+                    if (request.clipId == null) return@collect
+                    val bitmap = timelinePreviewController.extractCurrentFrameBitmap() ?: return@collect
+                    scopeViewModel.analyzeFrame(
+                        bitmap,
+                        com.example.timeline.engine.GradeEvaluationEngine.evaluateFrame(
+                            request.project,
+                            request.playheadFrame
+                        ),
+                        com.example.model.adjustments.ColorPipelineSettings()
+                    )
+                }
         }
     }
 
@@ -286,6 +299,11 @@ fun ChromaProApp(viewModel: MainViewModel = viewModel()) {
 }
 
 
+private data class ScopeAnalysisRequest(
+    val project: com.example.timeline.core.TimelineProject,
+    val playheadFrame: Long,
+    val clipId: String?
+)
 
 // Removed fake Timeline implementation
 

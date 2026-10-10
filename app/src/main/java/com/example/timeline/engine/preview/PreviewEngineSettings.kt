@@ -7,7 +7,7 @@ data class PreviewEngineSettings(
     val showDebugOverlay: Boolean = false,
     val showEngineBadge: Boolean = true,
     val autoFallbackOnFailure: Boolean = true,
-    val autoGenerateProxy: Boolean = false
+    val autoGenerateProxy: Boolean = true
 )
 
 enum class PreviewMode(val displayName: String) {

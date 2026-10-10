@@ -107,21 +107,27 @@ class ExportSettingsViewModel(application: Application) : AndroidViewModel(appli
     }
 
     /**
-     * The initial preset follows the one visible source clip where possible. Media3 cannot request
-     * an arbitrary output frame rate or resample the audio format in this bounded first adapter.
+     * Defaults follow project timing. The current Media3 adapter still requires a CFR source rate
+     * that matches the requested output rate, so mismatches remain explicitly rejected by validation.
      */
     private fun adaptToSimpleSource(settings: ExportSettings, project: TimelineProject): ExportSettings {
+        val projectRate = project.settings.getFpsRational()
+        val projectExportRate = projectRate.takeIf { it.numerator > 0 && it.denominator > 0 }
+            ?.let { ExportFrameRate(it.numerator, it.denominator) }
         val activeClips = project.tracks
             .filter { it.type == com.example.timeline.core.TrackType.VIDEO && it.isVisible }
             .flatMap { track -> track.clips.filter { it.isEnabled }.map { track to it } }
-        if (activeClips.size != 1) return settings
+        if (activeClips.size != 1) {
+            return settings.copy(frameRate = projectExportRate ?: settings.frameRate)
+        }
 
-        val (track, clip) = activeClips.single()
-        val asset = project.mediaAssets.firstOrNull { it.assetId == clip.mediaId } ?: return settings
-        val sourceRate = asset.metadata.exactFrameRate ?: asset.metadata.estimatedFrameRate
-        val exportRate = sourceRate?.takeIf { it.numerator > 0 && it.denominator > 0 }?.let(::closestExportFrameRate)
+        val clip = activeClips.single().second
+        val asset = project.mediaAssets.firstOrNull { it.assetId == clip.mediaId }
+        val sourceRate = asset?.metadata?.exactFrameRate ?: asset?.metadata?.estimatedFrameRate
+        val exportRate = projectExportRate
+            ?: sourceRate?.takeIf { it.numerator > 0 && it.denominator > 0 }?.let(::closestExportFrameRate)
             ?: settings.frameRate
-        val audio = asset.metadata.audioStreams.singleOrNull()
+        val audio = asset?.metadata?.audioStreams?.singleOrNull()
 
         return settings.copy(
             frameRate = exportRate,

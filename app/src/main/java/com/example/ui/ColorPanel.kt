@@ -309,7 +309,12 @@ fun ParamSlider(
     ) {
         Column(modifier = Modifier.weight(0.20f).padding(start = 8.dp)) {
             Text(label, fontSize = 10.sp, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text(String.format("%.2f", value), fontSize = 10.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+            val displayValue = if (parameterId == "saturation") {
+                "${kotlin.math.round(value * 100f).toInt()}%"
+            } else {
+                String.format("%.2f", value)
+            }
+            Text(displayValue, fontSize = 10.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
         }
         
         Slider(

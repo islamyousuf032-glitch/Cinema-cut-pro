@@ -48,6 +48,14 @@ fun VideoViewportSection(
         timelinePreviewController.onProjectChanged(project)
     }
 
+    LaunchedEffect(previewSettings.autoGenerateProxy, project.mediaAssets) {
+        if (previewSettings.autoGenerateProxy) {
+            project.mediaAssets
+                .filter { it.proxyStatus == com.example.timeline.media.ProxyStatus.RECOMMENDED }
+                .forEach { asset -> timelineViewModel.generateProxy(asset.assetId) }
+        }
+    }
+
     LaunchedEffect(playheadFrame) {
         if (!isPlaying) {
             timelinePreviewController.seekToTimelineFrame(project, playheadFrame)
@@ -109,18 +117,22 @@ fun VideoViewportSection(
                 val availableWidth = maxWidth
                 val screenHeight = androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp.dp
                 val availableHeight = if (maxHeight != androidx.compose.ui.unit.Dp.Infinity && maxHeight > 0.dp) maxHeight else screenHeight
-                
+                // Leave room for the viewport title, transport controls and spacing. In landscape,
+                // the parent viewport can be shorter than the old hard-coded 180dp minimum.
+                val canvasMaxHeight = (availableHeight - 72.dp).coerceAtLeast(64.dp)
+                    .coerceAtMost(420.dp)
+
                 val (canvasWidth, canvasHeight) = if (aspectRatioFloat > 1.0f) {
                     val calculatedHeight = availableWidth / aspectRatioFloat
-                    val h = calculatedHeight.coerceIn(180.dp, 280.dp)
+                    val h = minOf(calculatedHeight, canvasMaxHeight, 280.dp)
                     val w = minOf(availableWidth, h * aspectRatioFloat)
                     Pair(w, h)
                 } else if (aspectRatioFloat < 1.0f) {
-                    val h = minOf(420.dp, availableHeight * 0.38f)
+                    val h = minOf(420.dp, availableHeight * 0.38f, canvasMaxHeight)
                     val w = h * aspectRatioFloat
                     Pair(w, h)
                 } else {
-                    val size = minOf(availableWidth, 320.dp)
+                    val size = minOf(availableWidth, 320.dp, canvasMaxHeight)
                     Pair(size, size)
                 }
 

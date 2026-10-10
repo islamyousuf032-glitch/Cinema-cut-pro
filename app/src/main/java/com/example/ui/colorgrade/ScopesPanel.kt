@@ -23,14 +23,16 @@ enum class ScopeType {
     LUMA_WAVEFORM, RGB_PARADE, VECTORSCOPE, HISTOGRAM
 }
 
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun ScopesPanel(
     scopeData: ScopeData,
+    isAnalyzing: Boolean = false,
     onClose: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var selectedScope by remember { mutableStateOf(ScopeType.LUMA_WAVEFORM) }
-    
+
     Card(
         modifier = modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = Color(0xFF151515)),
@@ -39,32 +41,51 @@ fun ScopesPanel(
         Column(modifier = Modifier.padding(8.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text("SCOPES", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    ScopeType.values().forEach { type ->
-                        FilterChip(
-                            selected = selectedScope == type,
-                            onClick = { selectedScope = type },
-                            label = { Text(type.name.replace("_", " "), fontSize = 10.sp) },
-                            colors = FilterChipDefaults.filterChipColors(
-                                containerColor = Color.Transparent,
-                                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                                labelColor = Color.LightGray
-                            )
-                        )
-                    }
-                    IconButton(onClick = onClose, modifier = Modifier.size(24.dp)) {
-                        Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.LightGray)
-                    }
+                if (isAnalyzing) {
+                    Spacer(Modifier.width(8.dp))
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(12.dp),
+                        strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+                Spacer(Modifier.weight(1f))
+                IconButton(onClick = onClose, modifier = Modifier.size(32.dp)) {
+                    Icon(Icons.Default.Close, contentDescription = "Close scopes", tint = Color.LightGray)
                 }
             }
-            
+
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                ScopeType.values().forEach { type ->
+                    val label = when (type) {
+                        ScopeType.LUMA_WAVEFORM -> "Luma Waveform"
+                        ScopeType.RGB_PARADE -> "RGB Parade"
+                        ScopeType.VECTORSCOPE -> "Vectorscope"
+                        ScopeType.HISTOGRAM -> "Histogram"
+                    }
+                    FilterChip(
+                        selected = selectedScope == type,
+                        onClick = { selectedScope = type },
+                        label = { Text(label, fontSize = 12.sp, maxLines = 1) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            containerColor = Color.Transparent,
+                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                            labelColor = Color.LightGray,
+                            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                    )
+                }
+            }
+
             Spacer(modifier = Modifier.height(8.dp))
-            
-            Box(modifier = Modifier.fillMaxWidth().height(180.dp).background(Color.Black)) {
+            Box(modifier = Modifier.fillMaxWidth().height(160.dp).background(Color.Black)) {
                 when (selectedScope) {
                     ScopeType.LUMA_WAVEFORM -> LumaWaveformCanvas(scopeData, Modifier.fillMaxSize())
                     ScopeType.RGB_PARADE -> RgbParadeCanvas(scopeData, Modifier.fillMaxSize())

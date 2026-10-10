@@ -624,10 +624,17 @@ class Media3TransformerBackend(context: Context) : ExportBackend {
     private fun hasEnabledGrade(grade: ColorGradeStack): Boolean = grade.enabled &&
         (grade.opacity != 1f || grade.blendMode != "NORMAL" || grade.keyframes.isNotEmpty() ||
             grade.inputTransform != LogTransformParams() ||
-            grade.primaryCorrections != ColorGradeParams() || grade.curves != CurveParams() ||
-            grade.hslAdjustments != HslQualifierParams() || grade.selectiveColor != SelectiveColorParams() ||
+            // Basic primary corrections are mirrored into VideoAdjustmentParams by the editor and
+            // are rendered by Media3ClipAdjustmentSupport. Unsupported wheel values are rejected
+            // by that validator instead of blocking otherwise-exportable primary corrections.
+            grade.curves != CurveParams() || hasExportUnsupportedQualifier(grade.hslAdjustments) ||
+            grade.selectiveColor != SelectiveColorParams() ||
             grade.lutStack != LutGradeParams() || grade.colorMatch != ColorMatchParams() ||
             grade.skinToneProtection != SkinToneProtectionParams() || grade.hdrToneMapping != HdrToneMappingParams())
+
+    private fun hasExportUnsupportedQualifier(params: HslQualifierParams): Boolean = params.enabled &&
+        (params.showMatte || params.hueShift != 0f || params.saturation != 1f || params.luminance != 0f ||
+            params.contrast != 0f || params.temperature != 0f || params.tint != 0f)
 
     private fun hasEnabledColorLayers(stack: ColorGradeLayerStack): Boolean {
         if (!stack.enabled) return false

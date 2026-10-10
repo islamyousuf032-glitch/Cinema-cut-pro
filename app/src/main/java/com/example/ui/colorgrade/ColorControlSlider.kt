@@ -25,9 +25,16 @@ fun ColorControlSlider(
     onReset: () -> Unit,
     onDragStart: () -> Unit = {},
     onDragEnd: () -> Unit = {},
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    valueFormatter: ((Float) -> String)? = null
 ) {
-    var dragAccumulator by remember { mutableStateOf(0f) }
+    var dragValue by remember { mutableFloatStateOf(value) }
+    val latestValue = rememberUpdatedState(value)
+    val latestRange = rememberUpdatedState(range)
+    val latestOnValueChange = rememberUpdatedState(onValueChange)
+    val latestOnDragStart = rememberUpdatedState(onDragStart)
+    val latestOnDragEnd = rememberUpdatedState(onDragEnd)
+    val latestFormatter = rememberUpdatedState(valueFormatter)
 
     Column(modifier = modifier.fillMaxWidth()) {
         Row(
@@ -36,7 +43,7 @@ fun ColorControlSlider(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(label, color = Color.Gray, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-            val displayVal = if (range.start < 0f) {
+            val displayVal = latestFormatter.value?.invoke(value) ?: if (range.start < 0f) {
                 ((value / range.endInclusive) * 100).roundToInt().toString()
             } else {
                 ((value - range.start) / (range.endInclusive - range.start) * 100).roundToInt().toString()
@@ -47,25 +54,21 @@ fun ColorControlSlider(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(44.dp) // Minimum touch target size
+                .height(44.dp)
                 .pointerInput(Unit) {
                     detectHorizontalDragGestures(
-                        onDragStart = { onDragStart() },
-                        onDragEnd = { 
-                            dragAccumulator = 0f
-                            onDragEnd()
+                        onDragStart = {
+                            dragValue = latestValue.value
+                            latestOnDragStart.value()
                         },
-                        onDragCancel = { 
-                            dragAccumulator = 0f
-                            onDragEnd()
-                        }
+                        onDragEnd = { latestOnDragEnd.value() },
+                        onDragCancel = { latestOnDragEnd.value() }
                     ) { change, dragAmount ->
                         change.consume()
-                        dragAccumulator += dragAmount
-                        val rangeSpan = range.endInclusive - range.start
-                        val sensitivity = rangeSpan / 500f 
-                        val newValue = (value + dragAmount * sensitivity).coerceIn(range)
-                        onValueChange(newValue)
+                        val currentRange = latestRange.value
+                        val sensitivity = (currentRange.endInclusive - currentRange.start) / 500f
+                        dragValue = (dragValue + dragAmount * sensitivity).coerceIn(currentRange)
+                        latestOnValueChange.value(dragValue)
                     }
                 },
             contentAlignment = Alignment.Center
@@ -77,49 +80,43 @@ fun ColorControlSlider(
                     .clip(RoundedCornerShape(8.dp))
                     .background(Color(0xFF2C2C30))
             ) {
-                val fraction = if (range.start < 0f) {
-                (value - range.start) / (range.endInclusive - range.start)
-            } else {
-                (value - range.start) / (range.endInclusive - range.start)
-            }
-            val safeFraction = fraction.coerceIn(0f, 1f)
+                val span = (range.endInclusive - range.start).coerceAtLeast(0.0001f)
+                val fraction = ((value - range.start) / span).coerceIn(0f, 1f)
 
-            // Center-based logic for bipolar sliders
-            if (range.start < 0f && range.endInclusive > 0f) {
-                val center = (0f - range.start) / (range.endInclusive - range.start)
-                val width = kotlin.math.abs(safeFraction - center)
-                val start = minOf(safeFraction, center)
-                Row(modifier = Modifier.fillMaxSize()) {
-                    Spacer(modifier = Modifier.weight(start.coerceAtLeast(0.001f)))
+                if (range.start < 0f && range.endInclusive > 0f) {
+                    val center = (0f - range.start) / span
+                    val width = kotlin.math.abs(fraction - center)
+                    val start = minOf(fraction, center)
+                    Row(modifier = Modifier.fillMaxSize()) {
+                        Spacer(modifier = Modifier.weight(start.coerceAtLeast(0.001f)))
+                        Box(
+                            modifier = Modifier
+                                .weight(width.coerceAtLeast(0.001f))
+                                .fillMaxHeight()
+                                .background(Color.Gray)
+                        )
+                        val remaining = 1f - (start + width)
+                        Spacer(modifier = Modifier.weight(remaining.coerceAtLeast(0.001f)))
+                    }
                     Box(
                         modifier = Modifier
-                            .weight(width.coerceAtLeast(0.001f))
                             .fillMaxHeight()
-                            .background(Color.Gray)
+                            .width(2.dp)
+                            .background(Color.White)
+                            .align(Alignment.Center)
                     )
-                    val remaining = 1f - (start + width)
-                    Spacer(modifier = Modifier.weight(remaining.coerceAtLeast(0.001f)))
-                }
-                Box(
-                    modifier = Modifier
-                        .fillMaxHeight()
-                        .width(2.dp)
-                        .background(Color.White)
-                        .align(Alignment.Center)
-                )
-            } else {
-                Row(modifier = Modifier.fillMaxSize()) {
-                    Box(
-                        modifier = Modifier
-                            .weight(safeFraction.coerceAtLeast(0.001f))
-                            .fillMaxHeight()
-                            .background(Color.Gray)
-                    )
-                    val remaining = 1f - safeFraction
-                    Spacer(modifier = Modifier.weight(remaining.coerceAtLeast(0.001f)))
+                } else {
+                    Row(modifier = Modifier.fillMaxSize()) {
+                        Box(
+                            modifier = Modifier
+                                .weight(fraction.coerceAtLeast(0.001f))
+                                .fillMaxHeight()
+                                .background(Color.Gray)
+                        )
+                        Spacer(modifier = Modifier.weight((1f - fraction).coerceAtLeast(0.001f)))
+                    }
                 }
             }
-        }
         }
     }
 }

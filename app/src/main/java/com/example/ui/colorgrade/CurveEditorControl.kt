@@ -5,9 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
-import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -16,6 +14,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import com.example.model.colorgrade.CurvePoint
+import kotlin.math.hypot
 
 @Composable
 fun CurveEditorControl(
@@ -27,98 +26,122 @@ fun CurveEditorControl(
     modifier: Modifier = Modifier
 ) {
     var draggedPointIndex by remember { mutableStateOf<Int?>(null) }
+    val latestPoints = rememberUpdatedState(points)
+    val latestOnPointsChanged = rememberUpdatedState(onPointsChanged)
+    val latestOnDragStart = rememberUpdatedState(onDragStart)
+    val latestOnDragEnd = rememberUpdatedState(onDragEnd)
 
     Box(
         modifier = modifier
             .fillMaxWidth()
             .aspectRatio(1f)
             .background(Color(0xFF1E1F22))
-            .pointerInput(points) {
+            // Keep pointer input alive while the model changes on every drag frame. Keying these
+            // handlers by `points` cancels the active gesture as soon as Compose recomposes.
+            .pointerInput(Unit) {
                 detectTapGestures(
                     onTap = { offset ->
+                        val current = latestPoints.value
+                        if (current.size < 2) return@detectTapGestures
+
                         val x = (offset.x / size.width).coerceIn(0f, 1f)
                         val y = 1f - (offset.y / size.height).coerceIn(0f, 1f)
-                        
-                        val mutablePoints = points.toMutableList()
-                        mutablePoints.add(CurvePoint(x, y))
-                        mutablePoints.sortBy { it.x }
-                        onPointsChanged(mutablePoints)
-                        onDragEnd()
+                        val nearestDistance = current.minOfOrNull { point ->
+                            hypot((point.x - x).toDouble(), (point.y - y).toDouble()).toFloat()
+                        } ?: Float.MAX_VALUE
+                        // Taps on an existing control point select it; they should not stack
+                        // duplicate or almost-identical points underneath it.
+                        if (nearestDistance <= POINT_HIT_RADIUS || x <= current.first().x || x >= current.last().x) {
+                            return@detectTapGestures
+                        }
+
+                        val insertAfter = current.indexOfLast { it.x < x }.coerceIn(0, current.lastIndex - 1)
+                        val minX = current[insertAfter].x + MIN_POINT_GAP
+                        val maxX = current[insertAfter + 1].x - MIN_POINT_GAP
+                        if (minX > maxX) return@detectTapGestures
+
+                        val updated = current.toMutableList().apply {
+                            add(insertAfter + 1, CurvePoint(x.coerceIn(minX, maxX), y))
+                        }
+                        latestOnDragStart.value()
+                        latestOnPointsChanged.value(updated)
+                        latestOnDragEnd.value()
                     },
                     onLongPress = { offset ->
-                        // Find closest point to delete
-                        val x = (offset.x / size.width)
-                        val y = 1f - (offset.y / size.height)
-                        
-                        var closestIdx = -1
-                        var minDist = Float.MAX_VALUE
-                        for (i in 1 until points.size - 1) { // don't delete endpoints
-                            val dist = Math.hypot((points[i].x - x).toDouble(), (points[i].y - y).toDouble()).toFloat()
-                            if (dist < 0.1f && dist < minDist) {
-                                minDist = dist
-                                closestIdx = i
-                            }
+                        val current = latestPoints.value
+                        if (current.size <= 2) return@detectTapGestures
+                        val x = (offset.x / size.width).coerceIn(0f, 1f)
+                        val y = 1f - (offset.y / size.height).coerceIn(0f, 1f)
+                        val closestIdx = (1 until current.lastIndex).minByOrNull { index ->
+                            hypot(
+                                (current[index].x - x).toDouble(),
+                                (current[index].y - y).toDouble()
+                            )
                         }
-                        
-                        if (closestIdx != -1) {
-                            val mutablePoints = points.toMutableList()
-                            mutablePoints.removeAt(closestIdx)
-                            onPointsChanged(mutablePoints)
-                            onDragEnd()
+                        if (closestIdx != null) {
+                            val distance = hypot(
+                                (current[closestIdx].x - x).toDouble(),
+                                (current[closestIdx].y - y).toDouble()
+                            ).toFloat()
+                            if (distance <= DELETE_HIT_RADIUS) {
+                                latestOnDragStart.value()
+                                latestOnPointsChanged.value(current.toMutableList().apply { removeAt(closestIdx) })
+                                latestOnDragEnd.value()
+                            }
                         }
                     }
                 )
             }
-            .pointerInput(points) {
+            .pointerInput(Unit) {
                 detectDragGestures(
                     onDragStart = { offset ->
-                        onDragStart()
-                        val x = (offset.x / size.width)
-                        val y = 1f - (offset.y / size.height)
-                        
-                        // Find point to drag
-                        var closestIdx = -1
-                        var minDist = Float.MAX_VALUE
-                        for (i in points.indices) {
-                            val dist = Math.hypot((points[i].x - x).toDouble(), (points[i].y - y).toDouble()).toFloat()
-                            if (dist < 0.15f && dist < minDist) {
-                                minDist = dist
-                                closestIdx = i
-                            }
+                        val current = latestPoints.value
+                        val x = (offset.x / size.width).coerceIn(0f, 1f)
+                        val y = 1f - (offset.y / size.height).coerceIn(0f, 1f)
+                        val closestIdx = current.indices.minByOrNull { index ->
+                            hypot(
+                                (current[index].x - x).toDouble(),
+                                (current[index].y - y).toDouble()
+                            )
                         }
-                        draggedPointIndex = if (closestIdx != -1) closestIdx else null
+                        draggedPointIndex = closestIdx?.takeIf { index ->
+                            hypot(
+                                (current[index].x - x).toDouble(),
+                                (current[index].y - y).toDouble()
+                            ) <= POINT_HIT_RADIUS
+                        }
+                        latestOnDragStart.value()
                     },
                     onDragEnd = {
                         draggedPointIndex = null
-                        onDragEnd()
+                        latestOnDragEnd.value()
                     },
                     onDragCancel = {
                         draggedPointIndex = null
-                        onDragEnd()
+                        latestOnDragEnd.value()
                     }
                 ) { change, _ ->
                     change.consume()
                     val idx = draggedPointIndex ?: return@detectDragGestures
-                    
+                    val current = latestPoints.value
+                    if (idx !in current.indices) return@detectDragGestures
+
                     val newX = (change.position.x / size.width).coerceIn(0f, 1f)
                     val newY = 1f - (change.position.y / size.height).coerceIn(0f, 1f)
-                    
-                    val mutablePoints = points.toMutableList()
-                    
-                    // Constraints: keeping x sorted
                     var constrainedX = newX
                     if (idx == 0) {
-                        constrainedX = 0f // First point stays at x=0
-                    } else if (idx == points.size - 1) {
-                        constrainedX = 1f // Last point stays at x=1
+                        constrainedX = 0f
+                    } else if (idx == current.lastIndex) {
+                        constrainedX = 1f
                     } else {
-                        val minX = points[idx - 1].x + 0.01f
-                        val maxX = points[idx + 1].x - 0.01f
-                        constrainedX = constrainedX.coerceIn(minX, maxX)
+                        val minX = current[idx - 1].x + MIN_POINT_GAP
+                        val maxX = current[idx + 1].x - MIN_POINT_GAP
+                        if (minX <= maxX) constrainedX = constrainedX.coerceIn(minX, maxX)
                     }
 
-                    mutablePoints[idx] = CurvePoint(constrainedX, newY)
-                    onPointsChanged(mutablePoints)
+                    latestOnPointsChanged.value(current.toMutableList().apply {
+                        this[idx] = CurvePoint(constrainedX, newY)
+                    })
                 }
             }
     ) {
@@ -126,32 +149,33 @@ fun CurveEditorControl(
             val width = size.width
             val height = size.height
 
-            // Grid
             for (i in 1..3) {
                 val pos = i * width / 4
                 drawLine(Color.DarkGray, Offset(pos, 0f), Offset(pos, height), 1.dp.toPx())
                 drawLine(Color.DarkGray, Offset(0f, pos), Offset(width, pos), 1.dp.toPx())
             }
 
-            // Curve Line
             if (points.isNotEmpty()) {
                 val path = Path()
                 path.moveTo(points[0].x * width, (1f - points[0].y) * height)
                 for (i in 1 until points.size) {
-                    val p = points[i]
-                    path.lineTo(p.x * width, (1f - p.y) * height)
+                    val point = points[i]
+                    path.lineTo(point.x * width, (1f - point.y) * height)
                 }
                 drawPath(path, lineColor, style = Stroke(width = 2.dp.toPx()))
             }
 
-            // Points
-            for (p in points) {
+            points.forEach { point ->
                 drawCircle(
                     color = Color.White,
                     radius = 4.dp.toPx(),
-                    center = Offset(p.x * width, (1f - p.y) * height)
+                    center = Offset(point.x * width, (1f - point.y) * height)
                 )
             }
         }
     }
 }
+
+private const val POINT_HIT_RADIUS = 0.09f
+private const val DELETE_HIT_RADIUS = 0.09f
+private const val MIN_POINT_GAP = 0.01f

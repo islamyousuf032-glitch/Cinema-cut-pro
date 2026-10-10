@@ -84,7 +84,12 @@ fun HslPanel(
             Text("Adjustments Inside Mask", color = Color.LightGray, fontSize = 14.sp)
 
             ColorControlSlider("Hue Shift", params.hueShift, -0.5f..0.5f, { onParamsChange(params.copy(hueShift = it)) }, { onParamsChange(params.copy(hueShift = 0f)) })
-            ColorControlSlider("Saturation", params.saturation, 0f..2f, { onParamsChange(params.copy(saturation = it)) }, { onParamsChange(params.copy(saturation = 1f)) })
+            ColorControlSlider(
+                "Saturation", params.saturation, 0f..2f,
+                { onParamsChange(params.copy(saturation = it)) },
+                { onParamsChange(params.copy(saturation = 1f)) },
+                valueFormatter = { "${kotlin.math.round(it * 100f).toInt()}%" }
+            )
             ColorControlSlider("Luminance", params.luminance, -1f..1f, { onParamsChange(params.copy(luminance = it)) }, { onParamsChange(params.copy(luminance = 0f)) })
             ColorControlSlider("Contrast", params.contrast, -1f..1f, { onParamsChange(params.copy(contrast = it)) }, { onParamsChange(params.copy(contrast = 0f)) })
             ColorControlSlider("Temperature", params.temperature, -1f..1f, { onParamsChange(params.copy(temperature = it)) }, { onParamsChange(params.copy(temperature = 0f)) })

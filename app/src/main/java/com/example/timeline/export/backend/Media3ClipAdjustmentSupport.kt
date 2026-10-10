@@ -91,6 +91,9 @@ internal object Media3ClipAdjustmentSupport {
         if (!value.isFinite() || value < minimum || value > maximum) add(name)
     }
 
+    private fun FloatArray?.hasActiveHslValues(): Boolean =
+        this?.any { !it.isFinite() || kotlin.math.abs(it) > 0.000001f } == true
+
     private fun unsupportedAdjustmentNames(params: VideoAdjustmentParams): List<String> = buildList {
         if (params.highlights != defaults.highlights) add("highlights")
         if (params.shadows != defaults.shadows) add("shadows")
@@ -131,19 +134,25 @@ internal object Media3ClipAdjustmentSupport {
             params.toneMappingMode != defaults.toneMappingMode || params.highlightRolloff != defaults.highlightRolloff
         ) add("log/color-space transforms")
 
-        if (params.hslHue != defaults.hslHue || params.hslSat != defaults.hslSat || params.hslLum != defaults.hslLum) {
+        // The editor materializes neutral selective-HSL sliders as zero-filled arrays whenever
+        // any grade changes. Null and all-zero arrays are both neutral; compare values, not identity.
+        if (params.hslHue.hasActiveHslValues() || params.hslSat.hasActiveHslValues() || params.hslLum.hasActiveHslValues()) {
             add("selective HSL bands")
         }
         if (params.lutId != defaults.lutId || params.lutIntensity != defaults.lutIntensity) add("LUT")
-        if (params.qualEnabled != defaults.qualEnabled || params.qualHueCenter != defaults.qualHueCenter ||
-            params.qualHueWidth != defaults.qualHueWidth || params.qualHueFeather != defaults.qualHueFeather ||
-            params.qualSatMin != defaults.qualSatMin || params.qualSatMax != defaults.qualSatMax ||
-            params.qualSatFeather != defaults.qualSatFeather || params.qualLumMin != defaults.qualLumMin ||
-            params.qualLumMax != defaults.qualLumMax || params.qualLumFeather != defaults.qualLumFeather ||
-            params.qualInvert != defaults.qualInvert || params.qualShowMatte != defaults.qualShowMatte ||
-            params.qualHueShift != defaults.qualHueShift || params.qualSat != defaults.qualSat ||
-            params.qualLum != defaults.qualLum || params.qualContrast != defaults.qualContrast ||
-            params.qualTemp != defaults.qualTemp || params.qualTint != defaults.qualTint
+        // Qualifier controls have no effect unless enabled. Ignore stale range/matte values after
+        // the user disables HSL qualification.
+        if (params.qualEnabled && (
+                params.qualShowMatte ||
+                    params.qualHueCenter != defaults.qualHueCenter || params.qualHueWidth != defaults.qualHueWidth ||
+                    params.qualHueFeather != defaults.qualHueFeather || params.qualSatMin != defaults.qualSatMin ||
+                    params.qualSatMax != defaults.qualSatMax || params.qualSatFeather != defaults.qualSatFeather ||
+                    params.qualLumMin != defaults.qualLumMin || params.qualLumMax != defaults.qualLumMax ||
+                    params.qualLumFeather != defaults.qualLumFeather || params.qualInvert ||
+                    params.qualHueShift != defaults.qualHueShift || params.qualSat != defaults.qualSat ||
+                    params.qualLum != defaults.qualLum || params.qualContrast != defaults.qualContrast ||
+                    params.qualTemp != defaults.qualTemp || params.qualTint != defaults.qualTint
+            )
         ) add("HSL qualifier")
 
         if (params.redChannelMultiplier != defaults.redChannelMultiplier ||

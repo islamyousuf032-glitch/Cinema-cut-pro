@@ -126,22 +126,29 @@ class Media3FallbackPreviewEngine(context: Context) : PreviewEngine {
 
     override fun loadMedia(uriString: String, useProxy: Boolean, sourcePositionMs: Long, evaluatedParams: VideoAdjustmentParams?, presentationTimeUs: Long) {
         android.util.Log.d("PLAYER_MEDIA3", "Loading media uri: $uriString at $sourcePositionMs ms. Using proxy: $useProxy")
-        _currentState.value = PreviewState.LOADING
         
         if (evaluatedParams != null) {
+            // The GlEffect reads this value on Media3's GL thread. The effect parameters are
+            // volatile so a paused frame refresh observes slider changes immediately.
             effectGraph.setParams(evaluatedParams)
-            if (!exoPlayer.isPlaying && currentUri == uriString) {
-                // Force a re-render from paused state
-                exoPlayer.seekTo(sourcePositionMs)
-            }
         }
         
         if (currentUri == uriString) {
-            if (Math.abs(exoPlayer.currentPosition - sourcePositionMs) > 100) {
+            val positionChanged = exoPlayer.currentPosition != sourcePositionMs
+            val needsPausedGradeRefresh = !exoPlayer.isPlaying && evaluatedParams != null
+            if (positionChanged || needsPausedGradeRefresh) {
+                // Seeking even to the same timestamp invalidates the held frame and runs the
+                // updated effect graph; do not wait for playback to resume to see a grade change.
                 exoPlayer.seekTo(sourcePositionMs)
+            }
+            val isReady = exoPlayer.playbackState == Player.STATE_READY
+            _state.update { it.copy(usingProxy = useProxy, isReady = isReady) }
+            if (isReady) {
+                _currentState.value = if (exoPlayer.isPlaying) PreviewState.PLAYING else PreviewState.READY
             }
             return
         }
+        _currentState.value = PreviewState.LOADING
         currentUri = uriString
         _firstFrameRendered.value = false
         _state.update { it.copy(error = null, usingProxy = useProxy, isReady = false) }

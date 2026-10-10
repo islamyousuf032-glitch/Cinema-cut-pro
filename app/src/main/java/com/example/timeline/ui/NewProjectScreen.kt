@@ -37,6 +37,10 @@ fun NewProjectScreen(
                 value = uiState.projectName,
                 onValueChange = { viewModel.setProjectName(it) },
                 label = { Text("Project Name") },
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = MaterialTheme.colorScheme.primary,
+                    unfocusedBorderColor = MaterialTheme.colorScheme.onSurfaceVariant
+                ),
                 modifier = Modifier.fillMaxWidth(0.8f)
             )
             Spacer(modifier = Modifier.height(24.dp))

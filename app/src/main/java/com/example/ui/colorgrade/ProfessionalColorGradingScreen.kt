@@ -7,6 +7,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Warning
@@ -32,7 +34,9 @@ import com.example.timeline.engine.preview.TimelinePreviewController
 import com.example.timeline.engine.preview.PreviewEngineType
 
 import androidx.compose.material.icons.automirrored.filled.List
+import kotlinx.coroutines.flow.sample
 
+@OptIn(kotlinx.coroutines.FlowPreview::class, kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 @Composable
 fun ProfessionalColorGradingScreen(
     timelineViewModel: TimelineViewModel,
@@ -75,13 +79,19 @@ fun ProfessionalColorGradingScreen(
         return
     }
 
-    
+    var showBefore by remember { mutableStateOf(false) }
+    var showNodes by remember { mutableStateOf(false) }
     val layerStack = activeClip.colorLayers
     val selectedLayerId by layerViewModel.selectedLayerId.collectAsState()
     val activeLayer = layerStack.layers.find { it.id == selectedLayerId } ?: layerStack.layers.lastOrNull()
-    val currentGrade = activeLayer?.grade ?: com.example.model.colorgrade.ColorGradeHelper.defaultColorGrade(activeClip.id)
-
-    var showBefore by remember { mutableStateOf(false) }
+    // The regular color panel edits the clip grade. Node grades are used only when the node stack
+    // is open, preventing edits from disappearing into an unselected default layer.
+    val currentGrade = if (showNodes) {
+        activeLayer?.grade ?: activeClip.colorGrade
+    } else {
+        activeClip.colorGrade
+    }
+    val activeColorLayerId = if (showNodes) activeLayer?.id else null
     
     // Check Engine capabilities
     val engineType by previewController.engineTypeFlow.collectAsState()
@@ -96,12 +106,29 @@ fun ProfessionalColorGradingScreen(
         }
     }
     var showPresets by remember { mutableStateOf(false) }
-    var showNodes by remember { mutableStateOf(false) }
     var selectedTab by remember { mutableStateOf(0) }
     val tabs = listOf("Wheels", "Curves", "HSL", "LUT", "Match", "Scopes")
 
     val displayStack = if (showBefore) activeClip.adjustments.copy(enabled = false) else activeClip.adjustments
     val params = displayStack.evaluateParamsAtFrame(playheadFrame)
+    val isAnalyzingScopes by scopeViewModel.isAnalyzing.collectAsState()
+
+    LaunchedEffect(selectedTab) {
+        if (selectedTab == 5) {
+            androidx.compose.runtime.snapshotFlow {
+                Triple(uiState.project, playheadFrame, activeClip.id)
+            }
+                .sample(100L)
+                .collect { (project, frameNumber, _) ->
+                    val frame = previewController.extractCurrentFrameBitmap() ?: return@collect
+                    scopeViewModel.analyzeFrame(
+                        frame,
+                        com.example.timeline.engine.GradeEvaluationEngine.evaluateFrame(project, frameNumber),
+                        com.example.model.adjustments.ColorPipelineSettings()
+                    )
+                }
+        }
+    }
 
     LaunchedEffect(showBefore) {
         timelineViewModel.updateClipAdjustments(activeClip.id, displayStack)
@@ -113,61 +140,17 @@ fun ProfessionalColorGradingScreen(
                 .fillMaxSize()
                 .background(Color(0xFF16161A))
         ) {
-            // Toolbar
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(Color(0xFF1E1E22))
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Column {
-                    Text("COLOR GRADE", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary, letterSpacing = 1.sp)
-                    Text(activeClip.name, fontSize = 14.sp, color = Color.White)
-                }
-                
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Button(
-                        onClick = { showNodes = !showNodes },
-                        colors = ButtonDefaults.buttonColors(containerColor = if (showNodes) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-                        shape = androidx.compose.foundation.shape.RoundedCornerShape(6.dp)
-                    ) {
-                        Text("Nodes", fontSize = 12.sp, color = if (showNodes) MaterialTheme.colorScheme.onPrimary else Color.LightGray)
-                    }
-
-                    Button(
-                        onClick = { showPresets = true },
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-                        shape = androidx.compose.foundation.shape.RoundedCornerShape(6.dp)
-                    ) {
-                        Icon(imageVector = Icons.AutoMirrored.Filled.List, contentDescription = "Presets", modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Presets", fontSize = 12.sp)
-                    }
-
-                    TextButton(
-                        onClick = { showBefore = !showBefore },
-                        shape = androidx.compose.foundation.shape.RoundedCornerShape(6.dp)
-                    ) {
-                        Text(if (showBefore) "Show After" else "Show Before", fontSize = 12.sp)
-                    }
-
-                    // Copy/Paste
-                    IconButton(onClick = { colorViewModel.copyAdjustmentsFromSelectedClip() }, modifier = Modifier.size(32.dp)) {
-                        Icon(Icons.AutoMirrored.Filled.List, contentDescription = "Copy") // TODO: better icon
-                    }
-                    IconButton(onClick = { colorViewModel.pasteAdjustmentsToSelectedClip() }, modifier = Modifier.size(32.dp)) {
-                        Icon(Icons.AutoMirrored.Filled.List, contentDescription = "Paste") // TODO: better icon
-                    }
-                    
-                    IconButton(onClick = { colorViewModel.resetAllAdjustments() }, modifier = Modifier.size(32.dp)) {
-                        Icon(Icons.Default.Refresh, contentDescription = "Reset All", tint = MaterialTheme.colorScheme.error)
-                    }
-                }
-            }
+            ColorGradeToolbar(
+                clipName = activeClip.name,
+                showNodes = showNodes,
+                showBefore = showBefore,
+                onToggleNodes = { showNodes = !showNodes },
+                onShowPresets = { showPresets = true },
+                onToggleBefore = { showBefore = !showBefore },
+                onCopy = { colorViewModel.copyAdjustmentsFromSelectedClip() },
+                onPaste = { colorViewModel.pasteAdjustmentsToSelectedClip() },
+                onReset = { colorViewModel.resetAllAdjustments() }
+            )
 
             // Capability-aware Engine Prompt
             if (!capabilities.canApplyRealtimeColorGrade) {
@@ -239,7 +222,7 @@ Box(
                             gradeParams = currentGrade.primaryCorrections,
                             onParamsChange = { newParams ->
                                 val newGrade = currentGrade.copy(primaryCorrections = newParams)
-                                colorViewModel.updateColorGradeLive(newGrade)
+                                colorViewModel.updateColorGradeLive(newGrade, activeColorLayerId)
                             },
                             onDragStart = { colorViewModel.beginAdjustmentDrag() },
                             onDragEnd = { colorViewModel.endAdjustmentDrag(it) }
@@ -264,7 +247,12 @@ Box(
                                     ColorControlSlider("Contrast", params.contrast, -1f..1f, { colorViewModel.updateAdjustmentParamLive("contrast", it) }, { colorViewModel.updateAdjustmentParamLive("contrast", 0f) })
                                 }
                                 Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                                    ColorControlSlider("Saturation", params.saturation, 0f..2f, { colorViewModel.updateAdjustmentParamLive("saturation", it) }, { colorViewModel.updateAdjustmentParamLive("saturation", 1f) })
+                                    ColorControlSlider(
+                                        "Saturation", params.saturation, 0f..2f,
+                                        { colorViewModel.updateAdjustmentParamLive("saturation", it) },
+                                        { colorViewModel.updateAdjustmentParamLive("saturation", 1f) },
+                                        valueFormatter = { "${kotlin.math.round(it * 100f).toInt()}%" }
+                                    )
                                     ColorControlSlider("Vibrance", params.vibrance, -1f..1f, { colorViewModel.updateAdjustmentParamLive("vibrance", it) }, { colorViewModel.updateAdjustmentParamLive("vibrance", 0f) })
                                     ColorControlSlider("Mid Detail", params.clarity, -1f..1f, { colorViewModel.updateAdjustmentParamLive("clarity", it) }, { colorViewModel.updateAdjustmentParamLive("clarity", 0f) })
                                 }
@@ -278,7 +266,7 @@ Box(
                         curveParams = currentGrade.curves,
                         onParamsChange = { newCurves ->
                             val newGrade = currentGrade.copy(curves = newCurves)
-                            colorViewModel.updateColorGradeLive(newGrade)
+                            colorViewModel.updateColorGradeLive(newGrade, activeColorLayerId)
                         },
                         onDragStart = { colorViewModel.beginAdjustmentDrag() },
                         onDragEnd = { colorViewModel.endAdjustmentDrag("Curves") }
@@ -292,7 +280,7 @@ Box(
                             params = currentGrade.hslAdjustments,
                             onParamsChange = { newHsl ->
                                 val newGrade = currentGrade.copy(hslAdjustments = newHsl)
-                                colorViewModel.updateColorGradeLive(newGrade)
+                                colorViewModel.updateColorGradeLive(newGrade, activeColorLayerId)
                             },
                             onDragStart = { colorViewModel.beginAdjustmentDrag() },
                             onDragEnd = { colorViewModel.endAdjustmentDrag("HSL") },
@@ -306,7 +294,7 @@ Box(
                             params = currentGrade.selectiveColor,
                             onParamsChange = { newSelective ->
                                 val newGrade = currentGrade.copy(selectiveColor = newSelective)
-                                colorViewModel.updateColorGradeLive(newGrade)
+                                colorViewModel.updateColorGradeLive(newGrade, activeColorLayerId)
                             },
                             onDragStart = { colorViewModel.beginAdjustmentDrag() },
                             onDragEnd = { colorViewModel.endAdjustmentDrag("Selective Color") }
@@ -340,7 +328,8 @@ Box(
                     val scopeData by scopeViewModel.scopeData.collectAsState()
                     ScopesPanel(
                         scopeData = scopeData,
-                        onClose = { /* Not used in tab mode */ },
+                        isAnalyzing = isAnalyzingScopes,
+                        onClose = { selectedTab = 0 },
                         modifier = Modifier.fillMaxSize()
                     )
                 }
@@ -363,4 +352,119 @@ Box(
             }
         }
     } // end outer Box
+}
+
+
+@Composable
+private fun ColorGradeToolbar(
+    clipName: String,
+    showNodes: Boolean,
+    showBefore: Boolean,
+    onToggleNodes: () -> Unit,
+    onShowPresets: () -> Unit,
+    onToggleBefore: () -> Unit,
+    onCopy: () -> Unit,
+    onPaste: () -> Unit,
+    onReset: () -> Unit
+) {
+    BoxWithConstraints(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(Color(0xFF1E1E22))
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+    ) {
+        val compact = maxWidth < 600.dp
+        if (compact) {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                ColorGradeToolbarTitle(clipName, Modifier.fillMaxWidth())
+                Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    ColorGradeToolbarActions(
+                        showNodes, showBefore, onToggleNodes, onShowPresets,
+                        onToggleBefore, onCopy, onPaste, onReset
+                    )
+                }
+            }
+        } else {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                ColorGradeToolbarTitle(clipName, Modifier.weight(1f))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    ColorGradeToolbarActions(
+                        showNodes, showBefore, onToggleNodes, onShowPresets,
+                        onToggleBefore, onCopy, onPaste, onReset
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ColorGradeToolbarTitle(clipName: String, modifier: Modifier = Modifier) {
+    Column(modifier = modifier) {
+        Text(
+            "COLOR GRADE",
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.primary,
+            letterSpacing = 1.sp,
+            maxLines = 1
+        )
+        Text(clipName, fontSize = 14.sp, color = Color.White, maxLines = 1)
+    }
+}
+
+@Composable
+private fun RowScope.ColorGradeToolbarActions(
+    showNodes: Boolean,
+    showBefore: Boolean,
+    onToggleNodes: () -> Unit,
+    onShowPresets: () -> Unit,
+    onToggleBefore: () -> Unit,
+    onCopy: () -> Unit,
+    onPaste: () -> Unit,
+    onReset: () -> Unit
+) {
+    Button(
+        onClick = onToggleNodes,
+        colors = ButtonDefaults.buttonColors(
+            containerColor = if (showNodes) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant
+        ),
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(6.dp)
+    ) {
+        Text("Nodes", fontSize = 12.sp, color = if (showNodes) MaterialTheme.colorScheme.onPrimary else Color.LightGray)
+    }
+    Button(
+        onClick = onShowPresets,
+        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(6.dp)
+    ) {
+        Icon(imageVector = Icons.AutoMirrored.Filled.List, contentDescription = null, modifier = Modifier.size(16.dp))
+        Spacer(modifier = Modifier.width(4.dp))
+        Text("Presets", fontSize = 12.sp)
+    }
+    TextButton(
+        onClick = onToggleBefore,
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(6.dp)
+    ) {
+        Text(if (showBefore) "Show After" else "Show Before", fontSize = 12.sp, maxLines = 1)
+    }
+    IconButton(onClick = onCopy, modifier = Modifier.size(32.dp)) {
+        Icon(Icons.Default.ContentCopy, contentDescription = "Copy grade")
+    }
+    IconButton(onClick = onPaste, modifier = Modifier.size(32.dp)) {
+        Icon(Icons.Default.ContentPaste, contentDescription = "Paste grade")
+    }
+    IconButton(onClick = onReset, modifier = Modifier.size(32.dp)) {
+        Icon(Icons.Default.Refresh, contentDescription = "Reset all adjustments", tint = MaterialTheme.colorScheme.error)
+    }
 }

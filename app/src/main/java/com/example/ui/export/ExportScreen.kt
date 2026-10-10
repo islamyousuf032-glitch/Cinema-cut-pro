@@ -2,6 +2,8 @@ package com.example.ui.export
 
 import android.os.Environment
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
@@ -11,6 +13,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.timeline.core.TimelineProject
@@ -42,6 +45,7 @@ fun ExportScreen(
     viewModel: ExportSettingsViewModel = viewModel()
 ) {
     val context = LocalContext.current
+    val compactHeight = androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp < 480
     val uiState by viewModel.uiState.collectAsState()
     val exportState by BatchExportManager.exportState.collectAsState()
 
@@ -63,6 +67,14 @@ fun ExportScreen(
             } else {
                 val settings = uiState.currentSettings
                 if (settings != null) {
+                    var showValidationDetails by remember { mutableStateOf(false) }
+                    val validationDetails = buildString {
+                        uiState.validationResult.errorMessage?.takeIf { !uiState.validationResult.isValid }
+                            ?.let { appendLine(it) }
+                        uiState.validationResult.unsupportedFeatures.forEach { appendLine("• $it") }
+                        uiState.validationResult.warnings.forEach { appendLine("• $it") }
+                    }.trim().ifEmpty { "No additional validation details." }
+
                     Scaffold(
                         topBar = {
                             TopAppBar(
@@ -79,31 +91,57 @@ fun ExportScreen(
                                 tonalElevation = 8.dp,
                                 shadowElevation = 8.dp
                             ) {
-                                Column(modifier = Modifier.padding(16.dp)) {
-                                    // Validation Details
+                                Column(modifier = Modifier.padding(if (compactHeight) 8.dp else 16.dp)) {
                                     if (!uiState.validationResult.isValid) {
-                                        val errMsg = uiState.validationResult.errorMessage ?: "Configuration error"
-                                        Text(
-                                            "Cannot Export: $errMsg",
-                                            color = MaterialTheme.colorScheme.error,
-                                            style = MaterialTheme.typography.bodySmall,
-                                            modifier = Modifier.padding(bottom = 8.dp)
-                                        )
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            Text(
+                                                "Cannot Export: ${uiState.validationResult.errorMessage ?: "Configuration error"}",
+                                                color = MaterialTheme.colorScheme.error,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                maxLines = 2,
+                                                overflow = TextOverflow.Ellipsis,
+                                                modifier = Modifier.weight(1f)
+                                            )
+                                            TextButton(onClick = { showValidationDetails = true }) {
+                                                Text("Details")
+                                            }
+                                        }
                                     } else if (uiState.validationResult.warnings.isNotEmpty()) {
-                                        Text(
-                                            "Warnings:\n" + uiState.validationResult.warnings.joinToString("\n") { "• $it" },
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            style = MaterialTheme.typography.bodySmall,
-                                            modifier = Modifier.padding(bottom = 8.dp)
-                                        )
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            Text(
+                                                "${uiState.validationResult.warnings.size} export warning(s)",
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                                modifier = Modifier.weight(1f)
+                                            )
+                                            TextButton(onClick = { showValidationDetails = true }) {
+                                                Text("Details")
+                                            }
+                                        }
                                     }
                                     
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
-                                        horizontalArrangement = Arrangement.SpaceBetween
-                                    ) {
-                                        Text("Est. Size: ~${uiState.estimatedSizeMb.toInt()} MB", style = MaterialTheme.typography.bodySmall)
-                                        Text("Est. Time: ~${uiState.estimatedRenderTimeSec}s", style = MaterialTheme.typography.bodySmall)
+                                    if (compactHeight) {
+                                        Text(
+                                            "Est. size ~${uiState.estimatedSizeMb.toInt()} MB  •  time ~${uiState.estimatedRenderTimeSec}s",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            modifier = Modifier.padding(bottom = 4.dp)
+                                        )
+                                    } else {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                                            horizontalArrangement = Arrangement.SpaceBetween
+                                        ) {
+                                            Text("Est. Size: ~${uiState.estimatedSizeMb.toInt()} MB", style = MaterialTheme.typography.bodySmall)
+                                            Text("Est. Time: ~${uiState.estimatedRenderTimeSec}s", style = MaterialTheme.typography.bodySmall)
+                                        }
                                     }
 
                                     val queueState by BatchExportManager.queueState.collectAsState()
@@ -112,13 +150,16 @@ fun ExportScreen(
                                         Text("In Queue: ${queueState.size}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(bottom = 8.dp))
                                     }
 
-                                    Row(horizontalArrangement = Arrangement.spacedBy(16.dp), modifier = Modifier.fillMaxWidth()) {
+                                    Row(
+                                        horizontalArrangement = Arrangement.spacedBy(16.dp),
+                                        modifier = Modifier.fillMaxWidth().padding(bottom = if (compactHeight) 0.dp else 8.dp)
+                                    ) {
                                         OutlinedButton(
                                             onClick = {
                                                 val outFile = createAppScopedExportFile(context, settings.container.name.lowercase())
                                                 BatchExportManager.enqueueExport(project, settings, outFile)
                                             },
-                                            modifier = Modifier.weight(1f).height(56.dp),
+                                            modifier = Modifier.weight(1f).height(if (compactHeight) 48.dp else 56.dp),
                                             enabled = uiState.validationResult.isValid
                                         ) {
                                             Text("Queue")
@@ -133,7 +174,7 @@ fun ExportScreen(
                                                     BatchExportManager.startExport(context, project, settings, outFile)
                                                 }
                                             },
-                                            modifier = Modifier.weight(2f).height(56.dp),
+                                            modifier = Modifier.weight(2f).height(if (compactHeight) 48.dp else 56.dp),
                                             enabled = queueState.isNotEmpty() || uiState.validationResult.isValid
                                         ) {
                                             Text(if (queueState.isEmpty()) "Start Export" else "Start Queue", fontSize = MaterialTheme.typography.titleMedium.fontSize)
@@ -191,6 +232,25 @@ fun ExportScreen(
                                 )
                             }
                         }
+                    }
+                    if (showValidationDetails) {
+                        AlertDialog(
+                            onDismissRequest = { showValidationDetails = false },
+                            title = { Text(if (uiState.validationResult.isValid) "Export warnings" else "Export validation details") },
+                            text = {
+                                Text(
+                                    validationDetails,
+                                    modifier = Modifier
+                                        .heightIn(max = 320.dp)
+                                        .verticalScroll(rememberScrollState())
+                                )
+                            },
+                            confirmButton = {
+                                TextButton(onClick = { showValidationDetails = false }) {
+                                    Text("Close")
+                                }
+                            }
+                        )
                     }
                 }
             }

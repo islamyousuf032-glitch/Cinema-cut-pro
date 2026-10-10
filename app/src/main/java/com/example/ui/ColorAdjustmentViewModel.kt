@@ -325,7 +325,10 @@ class ColorAdjustmentViewModel(
         endAdjustmentDrag("Set LUT")
     }
 
-    fun updateColorGradeLive(newGrade: com.example.model.colorgrade.ColorGradeStack) {
+    fun updateColorGradeLive(
+        newGrade: com.example.model.colorgrade.ColorGradeStack,
+        colorLayerId: String? = null
+    ) {
         val state = timelineViewModel.uiState.value
         val clipId = state.selectedClipId ?: return
         val track = state.project.tracks.firstOrNull { t -> t.clips.any { c -> c.id == clipId } } ?: return
@@ -382,9 +385,17 @@ class ColorAdjustmentViewModel(
             )
             val newAdjustments = oldClip.adjustments.copy(params = newParams)
             
+            val newColorLayers = colorLayerId?.let { targetLayerId ->
+                oldClip.colorLayers.copy(
+                    layers = oldClip.colorLayers.layers.map { layer ->
+                        if (layer.id == targetLayerId) layer.copy(grade = newGrade) else layer
+                    }
+                )
+            } ?: oldClip.colorLayers
             val newClip = oldClip.copy(
                 colorGrade = newGrade,
-                adjustments = newAdjustments
+                adjustments = newAdjustments,
+                colorLayers = newColorLayers
             )
             val newTracks = state.project.tracks.map {
                 if (it.id == track.id) {

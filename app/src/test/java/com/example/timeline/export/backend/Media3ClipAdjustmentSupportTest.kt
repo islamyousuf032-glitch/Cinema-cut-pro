@@ -70,6 +70,46 @@ class Media3ClipAdjustmentSupportTest {
     }
 
     @Test
+    fun neutralHslArraysAndDisabledQualifierDoNotBlockPrimaryCorrectionExport() {
+        val params = VideoAdjustmentParams.default().copy(
+            contrast = 0.2f,
+            saturation = 1.2f,
+            hslHue = FloatArray(8),
+            hslSat = FloatArray(8),
+            hslLum = FloatArray(8),
+            qualEnabled = false,
+            qualHueCenter = 0.9f,
+            qualHueWidth = 0.3f,
+            qualInvert = true,
+            qualShowMatte = true,
+            qualHueShift = 0.4f
+        )
+
+        assertTrue(Media3ClipAdjustmentSupport.validationErrors(stack(params), nativeEngineAvailable = true).isEmpty())
+        assertTrue(Media3ClipAdjustmentSupport.hasRenderableAdjustments(params))
+    }
+
+    @Test
+    fun activeSelectiveHslAndEnabledQualifierRemainRejected() {
+        val selectiveHsl = VideoAdjustmentParams.default().copy(
+            hslHue = FloatArray(8).also { it[2] = 0.15f }
+        )
+        assertTrue(
+            Media3ClipAdjustmentSupport.validationErrors(stack(selectiveHsl), nativeEngineAvailable = true)
+                .any { it.contains("selective HSL bands") }
+        )
+
+        val qualifier = VideoAdjustmentParams.default().copy(
+            qualEnabled = true,
+            qualHueShift = 0.2f
+        )
+        assertTrue(
+            Media3ClipAdjustmentSupport.validationErrors(stack(qualifier), nativeEngineAvailable = true)
+                .any { it.contains("HSL qualifier") }
+        )
+    }
+
+    @Test
     fun activeAdjustmentRequiresTheNativeProcessorAndValidRanges() {
         val contrast = stack(VideoAdjustmentParams.default().copy(contrast = 0.2f))
         assertTrue(

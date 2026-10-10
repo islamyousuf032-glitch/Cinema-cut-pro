@@ -4,8 +4,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Equalizer
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -36,9 +37,9 @@ fun EditorTopBar(
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
-                        Icons.Filled.PlayArrow, 
-                        contentDescription = "Project Settings", 
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant, 
+                        Icons.Filled.Movie,
+                        contentDescription = "Project",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(20.dp)
                     )
                 }
@@ -46,19 +47,26 @@ fun EditorTopBar(
                 Column {
                     if (settings != null) {
                         Text(
-                            text = settings.projectName, 
-                            fontSize = 15.sp, 
-                            fontWeight = FontWeight.SemiBold, 
+                            text = "CINEMA CUT PRO",
+                            fontSize = 8.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary,
+                            letterSpacing = 0.8.sp
+                        )
+                        Text(
+                            text = settings.projectName,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.SemiBold,
                             color = MaterialTheme.colorScheme.onSurface
                         )
-                        
+
                         val resolution = "${settings.resolutionWidth}x${settings.resolutionHeight}"
                         val resLabel = when {
                             settings.resolutionWidth >= 3840 -> "4K"
                             settings.resolutionWidth >= 1920 -> "HD"
                             else -> resolution
                         }
-                        
+
                         val rational = settings.getFpsRational()
                         val fpsStr = if (rational.denominator == 1) {
                             "${rational.numerator} FPS"
@@ -66,22 +74,22 @@ fun EditorTopBar(
                             val floatFps = rational.numerator.toFloat() / rational.denominator
                             String.format("%.3f FPS", floatFps).replace(Regex("0+$"), "").removeSuffix(".")
                         }
-                        
+
                         val colorSpaceLabel = settings.colorSpace.displayName
                         val proxyLabel = if (isProxyActive) " • PROXY" else ""
-                        
+
                         Text(
-                            text = "$resLabel • $fpsStr • $colorSpaceLabel$proxyLabel", 
-                            fontSize = 11.sp, 
-                            color = MaterialTheme.colorScheme.onSurfaceVariant, 
-                            fontWeight = FontWeight.Medium, 
+                            text = "$resLabel • $fpsStr • $colorSpaceLabel$proxyLabel",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontWeight = FontWeight.Medium,
                             letterSpacing = 0.5.sp
                         )
                     } else {
                         Text(
-                            text = "Loading Project...", 
-                            fontSize = 15.sp, 
-                            fontWeight = FontWeight.SemiBold, 
+                            text = "Loading Project...",
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.SemiBold,
                             color = MaterialTheme.colorScheme.onSurface
                         )
                     }
@@ -93,7 +101,7 @@ fun EditorTopBar(
         ),
         actions = {
             IconButton(onClick = onToggleScopes) {
-                Icon(androidx.compose.material.icons.Icons.Filled.PlayArrow, contentDescription = "Scopes")
+                Icon(Icons.Filled.Equalizer, contentDescription = "Scopes")
             }
             IconButton(onClick = onDebugClick) {
                 Icon(androidx.compose.material.icons.Icons.Filled.Info, contentDescription = "Debug")

@@ -17,12 +17,4 @@ data class ScopeData(
     val vectorscope: IntArray = IntArray(256 * 256),
     
     val vectorscopeSkinTone: Boolean = false
-) {
-    override fun equals(other: Any?): Boolean {
-        if (this === other) return true
-        if (javaClass != other?.javaClass) return false
-        return true
-    }
-
-    override fun hashCode(): Int = javaClass.hashCode()
-}
+)

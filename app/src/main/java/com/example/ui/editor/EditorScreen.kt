@@ -42,6 +42,8 @@ fun EditorScreen(
     val isPlaying by timelineViewModel.isPlaying.collectAsState()
     val playheadFrame by editorViewModel.playheadFrame.collectAsState()
     val isSampling by colorAdjustmentViewModel.isEyedropperActive.collectAsState()
+    val scopeData by scopeViewModel.scopeData.collectAsState()
+    val isAnalyzingScopes by scopeViewModel.isAnalyzing.collectAsState()
 
     val activeClipAndAsset = remember(playheadFrame, timelineUiState.project.mediaAssets) {
         timelineViewModel.getActiveVideoClipAndAsset()
@@ -51,8 +53,9 @@ fun EditorScreen(
     var selectedTab by remember { mutableStateOf("Timeline") }
     var viewportWeight by remember { mutableFloatStateOf(0.4f) }
 
-    Column(modifier = Modifier.fillMaxSize()) {
-        VideoViewportSection(
+    Box(modifier = Modifier.fillMaxSize()) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            VideoViewportSection(
             timelineUiState = timelineUiState,
             timelineViewModel = timelineViewModel,
             editorViewModel = editorViewModel,
@@ -113,5 +116,19 @@ fun EditorScreen(
             onRelinkRequest = onRelinkRequest,
             modifier = Modifier.fillMaxWidth().weight(1f - viewportWeight)
         )
+        }
+        if (showScopes) {
+            com.example.ui.colorgrade.ScopesPanel(
+                scopeData = scopeData,
+                isAnalyzing = isAnalyzingScopes,
+                onClose = onToggleScopes,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(12.dp)
+                    .widthIn(max = 480.dp)
+                    .fillMaxWidth()
+                    .heightIn(max = 320.dp)
+            )
+        }
     }
 }
