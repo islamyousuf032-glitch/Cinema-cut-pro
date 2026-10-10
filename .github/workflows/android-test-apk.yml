@@ -58,6 +58,7 @@ jobs:
           python3 - <<'PY'
           import os
           import re
+          import xml.etree.ElementTree as ET
           from pathlib import Path
 
           log = Path("gradle-build.log")
@@ -67,12 +68,35 @@ jobs:
           pattern = re.compile(
               r"FAILURE:|What went wrong:|Execution failed for task|"
               r"Caused by:|Could not resolve|Unresolved reference|"
-              r"^e: |error:|Internal error|Exception is:|BUILD FAILED",
+              r"^e: |error:|Internal error|Exception is:|BUILD FAILED|"
+              r"Test process|Test Executor|There were failing tests|AssertionError|"
+              r"tests? completed|tests? failed|No tests found",
               re.IGNORECASE,
           )
           matches = [line for line in lines if pattern.search(line)]
-          excerpt = matches[-35:] if matches else lines[-60:]
+          context = []
+          for index, line in enumerate(lines):
+              if re.search(r"Test process encountered|Gradle Test Executor|There were failing tests", line, re.IGNORECASE):
+                  context.extend(lines[max(0, index - 4):min(len(lines), index + 18)])
+          excerpt = list(dict.fromkeys((matches[-45:] if matches else lines[-60:]) + context))
+
+          test_failures = []
+          for report_path in Path("app/build/test-results/testDebugUnitTest").glob("TEST-*.xml"):
+              try:
+                  root = ET.parse(report_path).getroot()
+              except ET.ParseError:
+                  continue
+              for case in root.iter("testcase"):
+                  for tag in ("failure", "error"):
+                      failure = case.find(tag)
+                      if failure is not None:
+                          detail = failure.get("message") or failure.get("type") or tag
+                          body = "".join(failure.itertext()).strip()
+                          test_failures.append(f"{case.get('classname', '?')}#{case.get('name', '?')}: {detail}\n{body[:1500]}")
+
           report = "Gradle build failure details:\n\n```text\n" + "\n".join(excerpt) + "\n```\n"
+          if test_failures:
+              report += "\nJUnit test failures:\n\n```text\n" + "\n\n".join(test_failures[:20]) + "\n```\n"
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
               summary.write(report)
           message = "\n".join(excerpt)
