@@ -39,6 +39,8 @@ fun VideoViewportSection(
     val currentAsset by timelinePreviewController.activeAsset.collectAsState()
     val playerState by timelinePreviewController.previewEngine.currentState.collectAsState()
     val playerError by timelinePreviewController.previewEngine.currentError.collectAsState()
+    val firstFrameRendered by timelinePreviewController.previewEngine.firstFrameRendered.collectAsState()
+    val latestIsPlaying by rememberUpdatedState(isPlaying)
     
     var showSafeArea by remember { mutableStateOf(false) }
     var showGuideOverlay by remember { mutableStateOf(false) }
@@ -97,6 +99,42 @@ fun VideoViewportSection(
             if (isPlaying) timelinePreviewController.play()
         } else if (asset != null) {
             timelineViewModel.markAssetPlaybackFailed(asset.assetId)
+        }
+    }
+
+    LaunchedEffect(
+        timelinePreviewController,
+        engineType,
+        currentAsset?.assetId,
+        playerState,
+        firstFrameRendered,
+        previewSettings.autoFallbackOnFailure
+    ) {
+        val nativeEngine = engineType == com.example.timeline.engine.preview.PreviewEngineType.FFMPEG_NATIVE ||
+            engineType == com.example.timeline.engine.preview.PreviewEngineType.VLC_NATIVE
+        val engineAtStart = timelinePreviewController.previewEngine
+        val assetIdAtStart = currentAsset?.assetId
+        if (
+            previewSettings.autoFallbackOnFailure &&
+            nativeEngine &&
+            currentAsset?.mimeType?.startsWith("video/") == true &&
+            !firstFrameRendered &&
+            playerState != com.example.timeline.engine.preview.PreviewState.ERROR
+        ) {
+            // Some decoder/device combinations stall before emitting an error. Avoid leaving a
+            // black viewport indefinitely: give native decode time, then try Media3 hardware decode.
+            kotlinx.coroutines.delay(5_000L)
+            if (
+                timelinePreviewController.previewEngine === engineAtStart &&
+                timelinePreviewController.previewEngine.currentState.value != com.example.timeline.engine.preview.PreviewState.ERROR &&
+                !timelinePreviewController.previewEngine.firstFrameRendered.value &&
+                timelinePreviewController.activeAsset.value?.assetId == assetIdAtStart
+            ) {
+                android.util.Log.w("VideoViewportSection", "Native player produced no first frame; switching to Media3")
+                timelinePreviewController.setEngineType(com.example.timeline.engine.preview.PreviewEngineType.MEDIA3_FALLBACK)
+                editorViewModel.updateSelectedEngine(com.example.timeline.engine.preview.PreviewEngineType.MEDIA3_FALLBACK)
+                if (latestIsPlaying) timelinePreviewController.play()
+            }
         }
     }
 

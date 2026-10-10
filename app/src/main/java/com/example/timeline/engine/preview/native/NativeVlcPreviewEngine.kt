@@ -48,9 +48,13 @@ class NativeVlcPreviewEngine(
     
     private var currentUri: String? = null
     private val mainHandler = Handler(Looper.getMainLooper())
-    private var loadGeneration = 0
-    private var pauseAfterFirstFrame = false
+    @Volatile private var loadGeneration = 0
+    @Volatile private var pauseAfterFirstFrame = false
+    @Volatile private var videoOutputReady = false
+    @Volatile private var initialPositionMs = 0L
+    @Volatile private var lastWarmupTimeMs: Long? = null
     private var pauseAfterFrameRunnable: Runnable? = null
+    private var firstFrameWatchdogRunnable: Runnable? = null
 
     override var onTimeChanged: ((Long) -> Unit)? = null
 
@@ -68,32 +72,54 @@ class NativeVlcPreviewEngine(
             mediaPlayer = MediaPlayer(libvlc)
 
             mediaPlayer?.setEventListener { event ->
-                when (event.type) {
-                    MediaPlayer.Event.Playing -> {
-                        _currentState.value = PreviewState.PLAYING
-                    }
-                    MediaPlayer.Event.Paused -> {
-                        _currentState.value = PreviewState.READY
-                    }
-                    MediaPlayer.Event.TimeChanged -> {
-                        onTimeChanged?.invoke(event.timeChanged * 1000L)
-                    }
-                    MediaPlayer.Event.EncounteredError -> {
-                        cancelPauseAfterFirstFrame()
-                        _currentState.value = PreviewState.ERROR
-                        _currentError.value = "FFmpeg/LibVLC playback error"
-                    }
-                    MediaPlayer.Event.Vout -> {
-                        if (event.voutCount > 0) {
-                            _firstFrameRendered.value = true
-                            schedulePauseAfterFirstFrame()
-                        }
-                    }
-                }
+                val dispatch = Runnable { handlePlayerEvent(event) }
+                if (Looper.myLooper() == Looper.getMainLooper()) dispatch.run() else mainHandler.post(dispatch)
             }
         } catch (e: Exception) {
             _currentState.value = PreviewState.ERROR
             _currentError.value = "Failed to initialize LibVLC: ${e.message}"
+        }
+    }
+
+    private fun handlePlayerEvent(event: MediaPlayer.Event) {
+        if (mediaPlayer == null) return
+        when (event.type) {
+            MediaPlayer.Event.Playing -> {
+                // Initial paused-preview decoding is an internal warm-up, not user playback.
+                // Keep loading until VLC advances after creating the video output.
+                _currentState.value = when {
+                    !pauseAfterFirstFrame -> PreviewState.PLAYING
+                    _firstFrameRendered.value -> PreviewState.READY
+                    else -> PreviewState.LOADING
+                }
+            }
+            MediaPlayer.Event.Paused -> {
+                _currentState.value = PreviewState.READY
+            }
+            MediaPlayer.Event.TimeChanged -> {
+                if (pauseAfterFirstFrame) {
+                    // Vout only confirms that VLC created an output. Wait for playback time
+                    // to advance as well before treating the warm-up as a decoded preview.
+                    val previousWarmupTime = lastWarmupTimeMs
+                    lastWarmupTimeMs = event.timeChanged
+                    if (videoOutputReady && previousWarmupTime != null && event.timeChanged != previousWarmupTime) {
+                        _firstFrameRendered.value = true
+                        cancelFirstFrameWatchdog()
+                        if (pauseAfterFrameRunnable == null) schedulePauseAfterFirstFrame()
+                    }
+                } else {
+                    if (videoOutputReady) _firstFrameRendered.value = true
+                    onTimeChanged?.invoke(event.timeChanged * 1000L)
+                }
+            }
+            MediaPlayer.Event.EncounteredError -> {
+                cancelPauseAfterFirstFrame()
+                _currentState.value = PreviewState.ERROR
+                _currentError.value = "FFmpeg/LibVLC playback error"
+            }
+            MediaPlayer.Event.Vout -> {
+                if (event.voutCount > 0) videoOutputReady = true
+            }
         }
     }
 
@@ -104,20 +130,52 @@ class NativeVlcPreviewEngine(
         val runnable = Runnable {
             if (scheduledGeneration == loadGeneration && pauseAfterFirstFrame) {
                 pauseAfterFirstFrame = false
-                if (mediaPlayer?.isPlaying == true) mediaPlayer?.pause()
+                cancelFirstFrameWatchdog()
+                mediaPlayer?.let { player ->
+                    if (player.isPlaying) player.pause()
+                    player.setVolume(100)
+                    // Warm-up is intentionally silent to the timeline. Restore the exact requested
+                    // frame so a paused preview never lands a few decoded frames past the playhead.
+                    if (player.time != initialPositionMs) player.time = initialPositionMs
+                }
                 _currentState.value = PreviewState.READY
             }
             pauseAfterFrameRunnable = null
         }
         pauseAfterFrameRunnable = runnable
-        // Vout reports a configured video output, not necessarily a presented frame. Give the
-        // decoder a short window to submit one before holding the frame for paused grading/UI.
+        // Vout plus an advancing media clock indicate decode progress, but the frame may still be
+        // in flight. Give the decoder a short window to submit it before holding the paused frame.
         mainHandler.postDelayed(runnable, 350L)
+    }
+
+    private fun scheduleFirstFrameWatchdog() {
+        firstFrameWatchdogRunnable?.let(mainHandler::removeCallbacks)
+        val scheduledGeneration = loadGeneration
+        val runnable = Runnable {
+            if (scheduledGeneration == loadGeneration && pauseAfterFirstFrame && !_firstFrameRendered.value) {
+                cancelPauseAfterFirstFrame()
+                mediaPlayer?.let { player ->
+                    if (player.isPlaying) player.pause()
+                    player.setVolume(100)
+                }
+                _currentError.value = "LibVLC did not produce a video frame within 5 seconds"
+                _currentState.value = PreviewState.ERROR
+            }
+            firstFrameWatchdogRunnable = null
+        }
+        firstFrameWatchdogRunnable = runnable
+        mainHandler.postDelayed(runnable, 5_000L)
+    }
+
+    private fun cancelFirstFrameWatchdog() {
+        firstFrameWatchdogRunnable?.let(mainHandler::removeCallbacks)
+        firstFrameWatchdogRunnable = null
     }
 
     private fun cancelPauseAfterFirstFrame() {
         pauseAfterFrameRunnable?.let(mainHandler::removeCallbacks)
         pauseAfterFrameRunnable = null
+        cancelFirstFrameWatchdog()
         pauseAfterFirstFrame = false
     }
 
@@ -158,9 +216,18 @@ class NativeVlcPreviewEngine(
         if (uriString == currentUri) {
             val positionDeltaMs = kotlin.math.abs(player.time - sourcePositionMs)
             if (sourcePositionMs >= 0L && (forceSeek || positionDeltaMs > 80L)) {
+                if (pauseAfterFirstFrame) {
+                    initialPositionMs = sourcePositionMs
+                    lastWarmupTimeMs = null
+                    pauseAfterFrameRunnable?.let(mainHandler::removeCallbacks)
+                    pauseAfterFrameRunnable = null
+                    _firstFrameRendered.value = false
+                }
                 player.time = sourcePositionMs
             }
-            if (player.isPlaying) {
+            if (pauseAfterFirstFrame) {
+                if (_firstFrameRendered.value) _currentState.value = PreviewState.READY
+            } else if (player.isPlaying) {
                 _currentState.value = PreviewState.PLAYING
             } else if (_firstFrameRendered.value) {
                 _currentState.value = PreviewState.READY
@@ -168,12 +235,15 @@ class NativeVlcPreviewEngine(
             return
         }
 
-        val continuePlayback = player.isPlaying
+        val continuePlayback = player.isPlaying && !pauseAfterFirstFrame
         cancelPauseAfterFirstFrame()
         loadGeneration += 1
         pauseAfterFirstFrame = !continuePlayback
         _currentState.value = PreviewState.LOADING
         _firstFrameRendered.value = false
+        videoOutputReady = false
+        initialPositionMs = sourcePositionMs.coerceAtLeast(0L)
+        lastWarmupTimeMs = null
         currentUri = uriString
 
         try {
@@ -188,6 +258,11 @@ class NativeVlcPreviewEngine(
             }
             player.media = media
             media.release()
+            if (pauseAfterFirstFrame) {
+                // Decode a preview frame without leaking audio from a paused timeline load.
+                player.setVolume(0)
+                scheduleFirstFrameWatchdog()
+            }
             // Start decoding to produce the first preview frame. A paused load is paused only
             // after VLC has had time to submit that frame; play()+pause() in one call froze black.
             player.play()
@@ -199,8 +274,15 @@ class NativeVlcPreviewEngine(
     }
 
     override fun play() {
+        val wasWarmingUp = pauseAfterFirstFrame
         cancelPauseAfterFirstFrame()
-        mediaPlayer?.play()
+        mediaPlayer?.let { player ->
+            if (wasWarmingUp) {
+                player.setVolume(100)
+                if (player.time != initialPositionMs) player.time = initialPositionMs
+            }
+            player.play()
+        }
     }
 
     override fun pause() {
