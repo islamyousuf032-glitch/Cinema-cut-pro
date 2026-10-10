@@ -240,7 +240,8 @@ fun ChromaProApp(viewModel: MainViewModel = viewModel()) {
                 val diagnostics = mapOf(
                     "activeEngine" to if (engine.currentError.collectAsState().value != null) "STILL_FRAME_FALLBACK" else engine.engineType.name,
                     "libVlcAvailable" to runCatching { Class.forName("org.videolan.libvlc.LibVLC"); "true" }.getOrDefault("false"),
-                    "nativeFfmpegAvailable" to "false",
+                    "ffmpegPlaybackBackend" to if (engine.engineType == com.example.timeline.engine.preview.PreviewEngineType.FFMPEG_NATIVE) "LibVLC native player" else "inactive",
+                    "directFfmpegJniDecoderAvailable" to "false",
                     "media3FallbackUsed" to (engine.engineType.name == "MEDIA3_FALLBACK").toString(),
                     "firstFrameRendered" to engine.firstFrameRendered.collectAsState().value.toString(),
                     "lastError" to (engine.currentError.collectAsState().value ?: "none")

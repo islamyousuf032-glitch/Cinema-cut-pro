@@ -36,7 +36,11 @@ fun EditorBottomPanel(
             }
             "Color" -> {
                 com.example.ui.colorgrade.ProfessionalColorGradingScreen(
-                    timelineViewModel, colorMatchViewModel, scopeViewModel, timelinePreviewController
+                    timelineViewModel,
+                    colorMatchViewModel,
+                    scopeViewModel,
+                    timelinePreviewController,
+                    editorViewModel
                 )
             }
             "Transform" -> {

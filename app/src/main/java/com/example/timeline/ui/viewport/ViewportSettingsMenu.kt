@@ -48,13 +48,13 @@ fun ViewportSettingsMenu(
 
             // Playback Engine
             SectionHeader("Playback Engine")
-            EngineOption(PreviewEngineType.AUTO, activeEngine, onEngineSelected, enabled = true, subtext = "Defaults to Media3")
-            EngineOption(PreviewEngineType.MEDIA3_FALLBACK, activeEngine, onEngineSelected, enabled = true, subtext = "Available")
+            EngineOption(PreviewEngineType.AUTO, activeEngine, onEngineSelected, enabled = true, subtext = "FFmpeg native first; Media3 fallback")
+            EngineOption(PreviewEngineType.FFMPEG_NATIVE, activeEngine, onEngineSelected, enabled = true, subtext = "Native LibVLC/FFmpeg playback")
+            EngineOption(PreviewEngineType.MEDIA3_FALLBACK, activeEngine, onEngineSelected, enabled = true, subtext = "Hardware decode + live grade preview")
             EngineOption(PreviewEngineType.BROWSER, activeEngine, onEngineSelected, enabled = true, subtext = "WebView based player")
             EngineOption(PreviewEngineType.STILL_FRAME, activeEngine, onEngineSelected, enabled = true, subtext = "Available for still preview only")
             EngineOption(PreviewEngineType.PROXY_PREVIEW, activeEngine, onEngineSelected, enabled = false, subtext = "Backend not installed")
-            EngineOption(PreviewEngineType.VLC_NATIVE, activeEngine, onEngineSelected, enabled = false, subtext = "Experimental (Unavailable)")
-            EngineOption(PreviewEngineType.NATIVE_CPP, activeEngine, onEngineSelected, enabled = false, subtext = "FFmpeg missing")
+            EngineOption(PreviewEngineType.NATIVE_CPP, activeEngine, onEngineSelected, enabled = false, subtext = "Separate native decoder stub is not linked")
 
             Spacer(modifier = Modifier.height(16.dp))
 
@@ -108,10 +108,12 @@ fun ViewportSettingsMenu(
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Medium
                 )
-            } else if (activeEngine == PreviewEngineType.VLC_NATIVE && !capabilities.canApplyRealtimeColorGrade) {
+            } else if ((activeEngine == PreviewEngineType.FFMPEG_NATIVE || activeEngine == PreviewEngineType.VLC_NATIVE) &&
+                !capabilities.canApplyRealtimeColorGrade
+            ) {
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = "Note: VLC Engine does not support real-time color grading. Still frame will be used.",
+                    text = "Live grading switches to the Media3 GPU preview while the Color panel is open.",
                     color = Color(0xFFFFA000),
                     style = MaterialTheme.typography.bodySmall,
                     fontSize = 11.sp,

@@ -62,7 +62,7 @@ fun ViewportStatusCard(
                 Spacer(modifier = Modifier.width(8.dp))
                 Button(onClick = onRetryPlayback, modifier = Modifier.height(32.dp), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) { Text("Retry") }
                 
-                if (engineType == "Native VLC") {
+                if (engineType == "Native VLC" || engineType == "FFmpeg / LibVLC") {
                     Spacer(modifier = Modifier.width(4.dp))
                     Button(onClick = { onSwitchEngine(com.example.timeline.engine.preview.PreviewEngineType.MEDIA3_FALLBACK) }, modifier = Modifier.height(32.dp), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) { Text("Use Media3") }
                 } else if (engineType == "Media3" || engineType == "Auto") {

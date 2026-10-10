@@ -14,30 +14,20 @@ interface GpuVideoFrameProcessor {
 
 class Media3GpuVideoFrameProcessor : GpuVideoFrameProcessor {
     private var colorEffect: VideoAdjustmentEffect? = null
-    private var sharpenEffect: SharpenEffect? = null
-    
+
     override fun setup(context: Context) {
         if (colorEffect == null) {
-            val params = VideoAdjustmentParams.default()
-            colorEffect = VideoAdjustmentEffect(params)
-            sharpenEffect = SharpenEffect(params)
+            colorEffect = VideoAdjustmentEffect(VideoAdjustmentParams.default())
         }
     }
-    
+
     override fun release() {
         colorEffect = null
-        sharpenEffect = null
     }
-    
-    override fun getMedia3Effects(): List<Effect> {
-        val effects = mutableListOf<Effect>()
-        colorEffect?.let { effects.add(it) }
-        sharpenEffect?.let { effects.add(it) }
-        return effects
-    }
-    
+
+    override fun getMedia3Effects(): List<Effect> = listOfNotNull(colorEffect)
+
     override fun setParams(params: VideoAdjustmentParams) {
         colorEffect?.currentParams = params
-        sharpenEffect?.currentParams = params
     }
 }

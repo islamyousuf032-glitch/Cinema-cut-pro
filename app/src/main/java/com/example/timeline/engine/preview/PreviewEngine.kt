@@ -6,7 +6,8 @@ import kotlinx.coroutines.flow.StateFlow
 
 enum class PreviewEngineType(val displayName: String) {
     AUTO("Auto"),
-    VLC_NATIVE("Native VLC"),
+    FFMPEG_NATIVE("FFmpeg / LibVLC"),
+    VLC_NATIVE("Native VLC (legacy)"),
     MEDIA3_FALLBACK("Media3"),
     BROWSER("WebView/Browser"),
     STILL_FRAME("Still Frame"),
@@ -49,7 +50,14 @@ interface PreviewEngine {
     val firstFrameRendered: StateFlow<Boolean>
     
     fun setSurface(surface: Surface?)
-    fun loadMedia(uriString: String, useProxy: Boolean, sourcePositionMs: Long, evaluatedParams: VideoAdjustmentParams?, presentationTimeUs: Long)
+    fun loadMedia(
+        uriString: String,
+        useProxy: Boolean,
+        sourcePositionMs: Long,
+        evaluatedParams: VideoAdjustmentParams?,
+        presentationTimeUs: Long,
+        forceSeek: Boolean = false
+    )
     fun play()
     fun pause()
     fun seekTo(timeUs: Long)

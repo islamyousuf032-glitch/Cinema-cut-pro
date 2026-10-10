@@ -43,7 +43,10 @@ class AdjustmentShaderProgram(
             val params = provider()
             
             AdjustmentUniformBinder.bindUniforms(glProgram, params, presentationTimeUs)
-            
+            glProgram.setFloatUniform("uSharpness", params.sharpness)
+            glProgram.setFloatUniform("uResolutionX", outputSize.width.coerceAtLeast(1).toFloat())
+            glProgram.setFloatUniform("uResolutionY", outputSize.height.coerceAtLeast(1).toFloat())
+
             val lutData = params.lutId?.let { com.example.model.colorgrade.lut.LutRepository.getCachedData(it) }
             val lutTexId = LutTextureManager.bindLutTexture(lutData)
             if (lutTexId != -1 && lutData != null) {

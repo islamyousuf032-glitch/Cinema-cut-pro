@@ -49,7 +49,14 @@ class NativeCppPreviewEngine : PreviewEngine {
         // Ideally we pass this to native
     }
 
-    override fun loadMedia(uriString: String, useProxy: Boolean, sourcePositionMs: Long, evaluatedParams: VideoAdjustmentParams?, presentationTimeUs: Long) {
+    override fun loadMedia(
+        uriString: String,
+        useProxy: Boolean,
+        sourcePositionMs: Long,
+        evaluatedParams: VideoAdjustmentParams?,
+        presentationTimeUs: Long,
+        forceSeek: Boolean
+    ) {
         _currentState.value = PreviewState.LOADING
         _currentError.value = null
         

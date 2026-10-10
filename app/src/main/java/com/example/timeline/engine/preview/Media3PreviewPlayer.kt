@@ -6,7 +6,6 @@ import android.view.Surface
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
-import com.example.model.adjustments.AdjustmentStack
 import com.example.model.adjustments.engine.VideoEffectGraph
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -41,7 +40,6 @@ class Media3FallbackPreviewEngine(context: Context) : PreviewEngine {
     
     val exoPlayer: ExoPlayer = ExoPlayer.Builder(context).build()
     private val effectGraph = VideoEffectGraph(context)
-    private val colorGradePipeline = ColorGradeRenderPipeline(effectGraph)
     
     // For legacy compat in codebase
     private val _state = MutableStateFlow(PreviewPlayerState())
@@ -52,6 +50,9 @@ class Media3FallbackPreviewEngine(context: Context) : PreviewEngine {
     override var onTimeChanged: ((Long) -> Unit)? = null
 
     private var timeTrackerJob: kotlinx.coroutines.Job? = null
+    private var pausedGradeRefreshJob: kotlinx.coroutines.Job? = null
+    private var pausedGradeRefreshPositionMs = 0L
+    private var lastPausedGradeRefreshMs = 0L
     private val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main + kotlinx.coroutines.SupervisorJob())
 
     init {
@@ -70,6 +71,13 @@ class Media3FallbackPreviewEngine(context: Context) : PreviewEngine {
                 when (playbackState) {
                     Player.STATE_BUFFERING -> _currentState.value = PreviewState.LOADING
                     Player.STATE_READY -> _currentState.value = if(exoPlayer.isPlaying) PreviewState.PLAYING else PreviewState.READY
+                    Player.STATE_ENDED -> {
+                        // Emit the final position once; ExoPlayer stops its 30fps tracker as soon
+                        // as isPlaying becomes false, but the timeline may still have another clip.
+                        _currentState.value = PreviewState.PLAYING
+                        onTimeChanged?.invoke(exoPlayer.currentPosition * 1000L)
+                        _currentState.value = PreviewState.READY
+                    }
                     Player.STATE_IDLE -> {
                         if (exoPlayer.playerError != null) {
                             _currentError.value = exoPlayer.playerError?.message
@@ -82,6 +90,7 @@ class Media3FallbackPreviewEngine(context: Context) : PreviewEngine {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 _state.update { it.copy(isPlaying = isPlaying) }
                 if (isPlaying) {
+                    cancelPausedGradeRefresh()
                     _currentState.value = PreviewState.PLAYING
                     startTimeTracker()
                 } else {
@@ -119,12 +128,48 @@ class Media3FallbackPreviewEngine(context: Context) : PreviewEngine {
         timeTrackerJob?.cancel()
         timeTrackerJob = null
     }
+
+    private fun cancelPausedGradeRefresh() {
+        pausedGradeRefreshJob?.cancel()
+        pausedGradeRefreshJob = null
+    }
+
+    private fun requestPausedGradeRefresh(positionMs: Long) {
+        pausedGradeRefreshPositionMs = positionMs
+        val now = android.os.SystemClock.elapsedRealtime()
+        val waitMs = (33L - (now - lastPausedGradeRefreshMs)).coerceAtLeast(0L)
+        if (waitMs == 0L) {
+            cancelPausedGradeRefresh()
+            if (!exoPlayer.isPlaying) {
+                exoPlayer.seekTo(pausedGradeRefreshPositionMs)
+                lastPausedGradeRefreshMs = now
+            }
+            return
+        }
+
+        cancelPausedGradeRefresh()
+        pausedGradeRefreshJob = scope.launch {
+            delay(waitMs)
+            pausedGradeRefreshJob = null
+            if (!exoPlayer.isPlaying) {
+                exoPlayer.seekTo(pausedGradeRefreshPositionMs)
+                lastPausedGradeRefreshMs = android.os.SystemClock.elapsedRealtime()
+            }
+        }
+    }
     
     override fun setSurface(surface: Surface?) {
         exoPlayer.setVideoSurface(surface)
     }
 
-    override fun loadMedia(uriString: String, useProxy: Boolean, sourcePositionMs: Long, evaluatedParams: VideoAdjustmentParams?, presentationTimeUs: Long) {
+    override fun loadMedia(
+        uriString: String,
+        useProxy: Boolean,
+        sourcePositionMs: Long,
+        evaluatedParams: VideoAdjustmentParams?,
+        presentationTimeUs: Long,
+        forceSeek: Boolean
+    ) {
         android.util.Log.d("PLAYER_MEDIA3", "Loading media uri: $uriString at $sourcePositionMs ms. Using proxy: $useProxy")
         
         if (evaluatedParams != null) {
@@ -134,12 +179,21 @@ class Media3FallbackPreviewEngine(context: Context) : PreviewEngine {
         }
         
         if (currentUri == uriString) {
-            val positionChanged = exoPlayer.currentPosition != sourcePositionMs
-            val needsPausedGradeRefresh = !exoPlayer.isPlaying && evaluatedParams != null
-            if (positionChanged || needsPausedGradeRefresh) {
-                // Seeking even to the same timestamp invalidates the held frame and runs the
-                // updated effect graph; do not wait for playback to resume to see a grade change.
+            val isPlaying = exoPlayer.isPlaying
+            val positionDeltaMs = kotlin.math.abs(exoPlayer.currentPosition - sourcePositionMs)
+            // Project/grade state can change many times per second while playing. Only seek for
+            // a real playhead jump then; routine slider updates just replace shader uniforms.
+            val seekThresholdMs = if (isPlaying) 300L else 80L
+            val positionNeedsSeek = forceSeek || positionDeltaMs > seekThresholdMs
+            val needsPausedGradeRefresh = !isPlaying && evaluatedParams != null
+            if (positionNeedsSeek) {
+                cancelPausedGradeRefresh()
                 exoPlayer.seekTo(sourcePositionMs)
+                lastPausedGradeRefreshMs = android.os.SystemClock.elapsedRealtime()
+            } else if (needsPausedGradeRefresh) {
+                // Coalesce high-frequency slider updates to at most ~30 refresh seeks/sec. The
+                // shader parameters are updated immediately; each rendered frame uses the latest.
+                requestPausedGradeRefresh(sourcePositionMs)
             }
             val isReady = exoPlayer.playbackState == Player.STATE_READY
             _state.update { it.copy(usingProxy = useProxy, isReady = isReady) }
@@ -148,6 +202,8 @@ class Media3FallbackPreviewEngine(context: Context) : PreviewEngine {
             }
             return
         }
+        cancelPausedGradeRefresh()
+        lastPausedGradeRefreshMs = 0L
         _currentState.value = PreviewState.LOADING
         currentUri = uriString
         _firstFrameRendered.value = false
@@ -160,6 +216,7 @@ class Media3FallbackPreviewEngine(context: Context) : PreviewEngine {
 
     fun clearMedia() {
         if (currentUri == null) return
+        cancelPausedGradeRefresh()
         currentUri = null
         exoPlayer.clearMediaItems()
         _state.update { it.copy(error = null, usingProxy = false, isReady = false) }
@@ -167,6 +224,7 @@ class Media3FallbackPreviewEngine(context: Context) : PreviewEngine {
     }
 
     override fun play() {
+        cancelPausedGradeRefresh()
         if (currentUri != null) {
             exoPlayer.play()
         }
@@ -181,6 +239,7 @@ class Media3FallbackPreviewEngine(context: Context) : PreviewEngine {
     }
     
     override fun seekTo(timeUs: Long) {
+        cancelPausedGradeRefresh()
         exoPlayer.seekTo(timeUs / 1000)
     }
 
@@ -193,6 +252,8 @@ class Media3FallbackPreviewEngine(context: Context) : PreviewEngine {
     }
 
     override fun release() {
+        cancelPausedGradeRefresh()
+        stopTimeTracker()
         effectGraph.release()
         exoPlayer.release()
     }

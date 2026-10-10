@@ -5,6 +5,12 @@ on:
     branches:
       - arena/a2d6ebb0-cinema-cut-pro
   workflow_dispatch:
+    inputs:
+      publish_test_release:
+        description: Publish the tested APK as a GitHub pre-release
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -109,7 +115,7 @@ jobs:
           retention-days: 30
 
       - name: Publish test APK in GitHub Releases
-        if: github.ref == 'refs/heads/arena/a2d6ebb0-cinema-cut-pro'
+        if: github.ref == 'refs/heads/arena/a2d6ebb0-cinema-cut-pro' && github.event_name == 'workflow_dispatch' && inputs.publish_test_release
         env:
           GH_TOKEN: ${{ github.token }}
           APK_NAME: ${{ steps.apk.outputs.name }}

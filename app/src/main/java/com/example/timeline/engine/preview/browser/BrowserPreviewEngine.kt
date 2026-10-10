@@ -145,7 +145,14 @@ class BrowserPreviewEngine(val context: Context) : PreviewEngine {
         // WebView renders into its own hierarchy
     }
 
-    override fun loadMedia(uriString: String, useProxy: Boolean, sourcePositionMs: Long, evaluatedParams: VideoAdjustmentParams?, presentationTimeUs: Long) {
+    override fun loadMedia(
+        uriString: String,
+        useProxy: Boolean,
+        sourcePositionMs: Long,
+        evaluatedParams: VideoAdjustmentParams?,
+        presentationTimeUs: Long,
+        forceSeek: Boolean
+    ) {
         _currentState.value = PreviewState.LOADING
         _firstFrameRendered.value = false
         

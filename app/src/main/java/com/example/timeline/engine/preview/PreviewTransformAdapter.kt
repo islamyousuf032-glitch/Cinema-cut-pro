@@ -21,7 +21,7 @@ object PreviewTransformAdapter {
         var message: String? = null
 
         when (engineType) {
-            PreviewEngineType.VLC_NATIVE, PreviewEngineType.BROWSER, PreviewEngineType.MEDIA3_FALLBACK -> {
+            PreviewEngineType.FFMPEG_NATIVE, PreviewEngineType.VLC_NATIVE, PreviewEngineType.BROWSER, PreviewEngineType.MEDIA3_FALLBACK -> {
                 if (hasPerspective) {
                     message = "Perspective preview requires GPU compositor or still-frame preview"
                     requiresStill = true

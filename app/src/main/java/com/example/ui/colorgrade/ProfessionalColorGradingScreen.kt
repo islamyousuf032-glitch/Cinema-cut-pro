@@ -11,7 +11,6 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.outlined.Place
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -29,6 +28,7 @@ import com.example.timeline.ui.TimelineViewModel
 import com.example.ui.ColorAdjustmentViewModel
 import com.example.ui.ColorMatchViewModel
 import com.example.ui.ColorLayerViewModel
+import com.example.ui.editor.EditorViewModel
 
 import com.example.timeline.engine.preview.TimelinePreviewController
 import com.example.timeline.engine.preview.PreviewEngineType
@@ -42,7 +42,8 @@ fun ProfessionalColorGradingScreen(
     timelineViewModel: TimelineViewModel,
     colorMatchViewModel: ColorMatchViewModel,
     scopeViewModel: com.example.ui.scopes.ScopeViewModel,
-    previewController: TimelinePreviewController
+    previewController: TimelinePreviewController,
+    editorViewModel: EditorViewModel
 ) {
     val colorViewModel: ColorAdjustmentViewModel = viewModel(
         factory = object : ViewModelProvider.Factory {
@@ -65,6 +66,7 @@ fun ProfessionalColorGradingScreen(
 
     val uiState by timelineViewModel.uiState.collectAsState()
     val playheadFrame by timelineViewModel.playheadFrame.collectAsState()
+    val isPlaying by timelineViewModel.isPlaying.collectAsState()
 
     val activeClip = if (uiState.selectedClipId != null) {
         uiState.project.tracks.flatMap { it.clips }.find { it.id == uiState.selectedClipId }
@@ -77,6 +79,14 @@ fun ProfessionalColorGradingScreen(
             Text("Select a clip to grade", color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         return
+    }
+
+    LaunchedEffect(activeClip.id) {
+        if (uiState.selectedClipId == null) timelineViewModel.selectClip(activeClip.id)
+        if (playheadFrame < activeClip.timelineStart || playheadFrame >= activeClip.timelineEnd) {
+            timelineViewModel.setPlayheadFrame(activeClip.timelineStart)
+            editorViewModel.updatePlayheadFrame(activeClip.timelineStart)
+        }
     }
 
     var showBefore by remember { mutableStateOf(false) }
@@ -93,18 +103,34 @@ fun ProfessionalColorGradingScreen(
     }
     val activeColorLayerId = if (showNodes) activeLayer?.id else null
     
-    // Check Engine capabilities
     val engineType by previewController.engineTypeFlow.collectAsState()
-    val capabilities = previewController.previewEngine.capabilities
-    
-    var showEnginePrompt by remember { mutableStateOf(false) }
-    LaunchedEffect(engineType) {
-        if (!capabilities.canApplyRealtimeColorGrade) {
-            showEnginePrompt = true
-        } else {
-            showEnginePrompt = false
+    val engineToRestore = remember(previewController) { previewController.engineTypeFlow.value }
+    val needsMedia3ForLiveGrade = remember(previewController) {
+        !previewController.previewEngine.capabilities.canApplyRealtimeColorGrade
+    }
+    val latestIsPlaying by rememberUpdatedState(isPlaying)
+    DisposableEffect(previewController, engineToRestore, needsMedia3ForLiveGrade) {
+        if (needsMedia3ForLiveGrade) {
+            previewController.setEngineType(PreviewEngineType.MEDIA3_FALLBACK)
+            if (latestIsPlaying) previewController.play()
+        }
+        onDispose {
+            if (needsMedia3ForLiveGrade &&
+                previewController.engineTypeFlow.value == PreviewEngineType.MEDIA3_FALLBACK &&
+                engineToRestore != PreviewEngineType.MEDIA3_FALLBACK
+            ) {
+                previewController.setEngineType(engineToRestore)
+                if (latestIsPlaying) previewController.play()
+            }
         }
     }
+    LaunchedEffect(engineType) {
+        if (needsMedia3ForLiveGrade && engineType != PreviewEngineType.MEDIA3_FALLBACK) {
+            previewController.setEngineType(PreviewEngineType.MEDIA3_FALLBACK)
+            if (isPlaying) previewController.play()
+        }
+    }
+
     var showPresets by remember { mutableStateOf(false) }
     var selectedTab by remember { mutableStateOf(0) }
     val tabs = listOf("Wheels", "Curves", "HSL", "LUT", "Match", "Scopes")
@@ -152,41 +178,18 @@ fun ProfessionalColorGradingScreen(
                 onReset = { colorViewModel.resetAllAdjustments() }
             )
 
-            // Capability-aware Engine Prompt
-            if (!capabilities.canApplyRealtimeColorGrade) {
+            if (needsMedia3ForLiveGrade) {
                 Surface(
-                    color = Color(0xFF3E2723), 
-                    modifier = Modifier.fillMaxWidth().padding(8.dp), 
+                    color = Color(0xFF202A35),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
                     shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp)
                 ) {
-                    Column(modifier = Modifier.padding(12.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Warning, contentDescription = null, tint = Color(0xFFFFB300), modifier = Modifier.size(20.dp))
-                            Spacer(Modifier.width(8.dp))
-                            val msg = "Realtime grading not available on this engine"
-                            Text(msg, style = MaterialTheme.typography.labelMedium, color = Color.White)
-                        }
-                        Spacer(Modifier.height(8.dp))
-                        
-                        // Adaptive buttons
-                        Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            if (engineType != PreviewEngineType.MEDIA3_FALLBACK) {
-                                Button(onClick = { previewController.setEngineType(PreviewEngineType.MEDIA3_FALLBACK) }, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)) {
-                                    Text("Media3 Color Preview", fontSize = 10.sp)
-                                }
-                            }
-
-                            if (engineType != PreviewEngineType.STILL_FRAME) {
-                                Button(onClick = { previewController.setEngineType(PreviewEngineType.STILL_FRAME) }, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)) {
-                                    Text("Graded Still Preview", fontSize = 10.sp)
-                                }
-                            }
-
-                            Button(onClick = { timelineViewModel.generateProxy(activeClip.mediaId) }, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)) {
-                                Text("Generate Grading Proxy", fontSize = 10.sp)
-                            }
-                        }
-                    }
+                    Text(
+                        text = "Live GPU grade preview: ${engineType.displayName}. ${engineToRestore.displayName} playback resumes when you leave Color.",
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = Color.White
+                    )
                 }
             }
             

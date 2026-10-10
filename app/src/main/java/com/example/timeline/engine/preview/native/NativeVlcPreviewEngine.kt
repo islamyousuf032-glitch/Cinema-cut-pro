@@ -2,6 +2,8 @@ package com.example.timeline.engine.preview.native
 
 import android.content.Context
 import android.net.Uri
+import android.os.Handler
+import android.os.Looper
 import android.view.Surface
 import com.example.model.adjustments.VideoAdjustmentParams
 import com.example.timeline.engine.preview.PreviewEngine
@@ -15,8 +17,10 @@ import org.videolan.libvlc.LibVLC
 import org.videolan.libvlc.Media
 import org.videolan.libvlc.MediaPlayer
 
-class NativeVlcPreviewEngine(private val context: Context) : PreviewEngine {
-    override val engineType = PreviewEngineType.VLC_NATIVE
+class NativeVlcPreviewEngine(
+    private val context: Context,
+    override val engineType: PreviewEngineType = PreviewEngineType.VLC_NATIVE
+) : PreviewEngine {
     
     override val capabilities: PreviewEngineCapabilities = PreviewEngineCapabilities(
         canPlayMovingVideo = true,
@@ -43,40 +47,46 @@ class NativeVlcPreviewEngine(private val context: Context) : PreviewEngine {
     private var mediaPlayer: MediaPlayer? = null
     
     private var currentUri: String? = null
-    
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var loadGeneration = 0
+    private var pauseAfterFirstFrame = false
+    private var pauseAfterFrameRunnable: Runnable? = null
+
     override var onTimeChanged: ((Long) -> Unit)? = null
 
     init {
         try {
-            val options = ArrayList<String>()
-            options.add("--no-drop-late-frames")
-            options.add("--no-skip-frames")
-            options.add("--vout=android-display")
-            options.add("--network-caching=150")
-            options.add("--file-caching=150")
-            options.add("-vv")
+            val options = arrayListOf(
+                "--vout=android-display",
+                "--avcodec-hw=any",
+                "--network-caching=500",
+                "--file-caching=250"
+            )
+            // Keep VLC's late-frame dropping and frame-skip defaults enabled. Disabling both
+            // made the old player preserve every frame by stalling playback on slower phones.
             libvlc = LibVLC(context, options)
             mediaPlayer = MediaPlayer(libvlc)
-            
+
             mediaPlayer?.setEventListener { event ->
                 when (event.type) {
                     MediaPlayer.Event.Playing -> {
                         _currentState.value = PreviewState.PLAYING
-                        _firstFrameRendered.value = true
                     }
                     MediaPlayer.Event.Paused -> {
                         _currentState.value = PreviewState.READY
                     }
                     MediaPlayer.Event.TimeChanged -> {
-                        onTimeChanged?.invoke(event.timeChanged * 1000L) // Convert ms to us
+                        onTimeChanged?.invoke(event.timeChanged * 1000L)
                     }
                     MediaPlayer.Event.EncounteredError -> {
+                        cancelPauseAfterFirstFrame()
                         _currentState.value = PreviewState.ERROR
-                        _currentError.value = "VLC MediaPlayer Error"
+                        _currentError.value = "FFmpeg/LibVLC playback error"
                     }
                     MediaPlayer.Event.Vout -> {
                         if (event.voutCount > 0) {
                             _firstFrameRendered.value = true
+                            schedulePauseAfterFirstFrame()
                         }
                     }
                 }
@@ -85,6 +95,30 @@ class NativeVlcPreviewEngine(private val context: Context) : PreviewEngine {
             _currentState.value = PreviewState.ERROR
             _currentError.value = "Failed to initialize LibVLC: ${e.message}"
         }
+    }
+
+    private fun schedulePauseAfterFirstFrame() {
+        if (!pauseAfterFirstFrame) return
+        pauseAfterFrameRunnable?.let(mainHandler::removeCallbacks)
+        val scheduledGeneration = loadGeneration
+        val runnable = Runnable {
+            if (scheduledGeneration == loadGeneration && pauseAfterFirstFrame) {
+                pauseAfterFirstFrame = false
+                if (mediaPlayer?.isPlaying == true) mediaPlayer?.pause()
+                _currentState.value = PreviewState.READY
+            }
+            pauseAfterFrameRunnable = null
+        }
+        pauseAfterFrameRunnable = runnable
+        // Vout reports a configured video output, not necessarily a presented frame. Give the
+        // decoder a short window to submit one before holding the frame for paused grading/UI.
+        mainHandler.postDelayed(runnable, 180L)
+    }
+
+    private fun cancelPauseAfterFirstFrame() {
+        pauseAfterFrameRunnable?.let(mainHandler::removeCallbacks)
+        pauseAfterFrameRunnable = null
+        pauseAfterFirstFrame = false
     }
 
     override fun setSurface(surface: Surface?) {
@@ -114,53 +148,63 @@ class NativeVlcPreviewEngine(private val context: Context) : PreviewEngine {
         useProxy: Boolean,
         sourcePositionMs: Long,
         evaluatedParams: VideoAdjustmentParams?,
-        presentationTimeUs: Long
+        presentationTimeUs: Long,
+        forceSeek: Boolean
     ) {
-        if (libvlc == null || mediaPlayer == null) return
-        
-        if (uriString != currentUri) {
-            _currentState.value = PreviewState.LOADING
-            _firstFrameRendered.value = false
-            currentUri = uriString
-            try {
-                val uri = Uri.parse(uriString)
-                val media = if (uri.scheme == "file" || uri.scheme == null) {
-                    Media(libvlc, uri.path)
-                } else {
-                    Media(libvlc, uri)
-                }
-                
-                // For faster seek/playback locally
-                media.addOption(":no-audio") // If we just want video preview, or allow audio? Let's leave audio enabled by default unless needed
-                media.addOption(":start-time=${sourcePositionMs / 1000f}")
-                
-                mediaPlayer?.media = media
-                media.release()
-            } catch (e: Exception) {
-                _currentState.value = PreviewState.ERROR
-                _currentError.value = e.message ?: "Failed to load media"
-                return
+        val vlc = libvlc ?: return
+        val player = mediaPlayer ?: return
+        _currentError.value = null
+
+        if (uriString == currentUri) {
+            val positionDeltaMs = kotlin.math.abs(player.time - sourcePositionMs)
+            if (sourcePositionMs >= 0L && (forceSeek || positionDeltaMs > 80L)) {
+                player.time = sourcePositionMs
             }
-        } else {
-            mediaPlayer?.time = sourcePositionMs
+            if (player.isPlaying) {
+                _currentState.value = PreviewState.PLAYING
+            } else if (_firstFrameRendered.value) {
+                _currentState.value = PreviewState.READY
+            }
+            return
         }
 
-        // Let VLC handle play/pause via explicit play/pause method calls.
-        // If we just need to seek, let's just seek.
-        // Note: VLC might not update screen when seeking while paused, 
-        // but we rely on StillFrameFallback or explicit play to update the screen for now.
-        if (_currentState.value != PreviewState.PLAYING) {
-            mediaPlayer?.play()
-            // We use a small delay or rely on UI to pause it properly if needed, but for now we just pause.
-            mediaPlayer?.pause()
+        val continuePlayback = player.isPlaying
+        cancelPauseAfterFirstFrame()
+        loadGeneration += 1
+        pauseAfterFirstFrame = !continuePlayback
+        _currentState.value = PreviewState.LOADING
+        _firstFrameRendered.value = false
+        currentUri = uriString
+
+        try {
+            val uri = Uri.parse(uriString)
+            val media = if (uri.scheme == "file" || uri.scheme == null) {
+                Media(vlc, uri.path)
+            } else {
+                Media(vlc, uri)
+            }
+            if (sourcePositionMs > 0L) {
+                media.addOption(":start-time=${sourcePositionMs / 1000f}")
+            }
+            player.media = media
+            media.release()
+            // Start decoding to produce the first preview frame. A paused load is paused only
+            // after VLC has had time to submit that frame; play()+pause() in one call froze black.
+            player.play()
+        } catch (error: Exception) {
+            cancelPauseAfterFirstFrame()
+            _currentState.value = PreviewState.ERROR
+            _currentError.value = error.message ?: "Failed to load media"
         }
     }
 
     override fun play() {
+        cancelPauseAfterFirstFrame()
         mediaPlayer?.play()
     }
 
     override fun pause() {
+        cancelPauseAfterFirstFrame()
         mediaPlayer?.pause()
     }
 
@@ -196,12 +240,15 @@ class NativeVlcPreviewEngine(private val context: Context) : PreviewEngine {
     }
 
     override fun release() {
+        cancelPauseAfterFirstFrame()
         mediaPlayer?.vlcVout?.detachViews()
         mediaPlayer?.release()
         libvlc?.release()
         mediaPlayer = null
         libvlc = null
         surface = null
+        currentUri = null
+        _currentState.value = PreviewState.IDLE
     }
 
     override val currentPositionUs: Long

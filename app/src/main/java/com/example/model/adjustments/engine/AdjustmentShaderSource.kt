@@ -169,6 +169,9 @@ object AdjustmentShaderSource {
         uniform float uDehaze;
         uniform float uClarity;
         uniform float uStructure;
+        uniform float uSharpness;
+        uniform float uResolutionX;
+        uniform float uResolutionY;
         
         // Input Color Management
         uniform int uInputLogType; // 0=None, 1=SLog3, 2=CLog, 3=VLog, 4=Rec2020
@@ -505,7 +508,19 @@ object AdjustmentShaderSource {
             } else if (uOutputColorSpace == 2) { // HLG Target
                 rgb = pow(clamp(rgb, 0.0, 1.0), vec3(0.5)); // extremely basic mock HLG transfer
             }
-            
+
+            // Fuse sharpening into the color pass. The four-tap cross kernel avoids an
+            // additional full-frame render target/pass; no texture samples are added at 0.
+            if (uSharpness > 0.0) {
+                vec2 texel = 1.0 / max(vec2(uResolutionX, uResolutionY), vec2(1.0));
+                vec3 neighbors =
+                    texture(texSampler, vTexCoords + vec2(-texel.x, 0.0)).rgb +
+                    texture(texSampler, vTexCoords + vec2( texel.x, 0.0)).rgb +
+                    texture(texSampler, vTexCoords + vec2(0.0, -texel.y)).rgb +
+                    texture(texSampler, vTexCoords + vec2(0.0,  texel.y)).rgb;
+                rgb += (color.rgb - neighbors * 0.25) * (uSharpness * 3.0);
+            }
+
             outColor = vec4(clamp(rgb, 0.0, 1.0), color.a);
         }
     """

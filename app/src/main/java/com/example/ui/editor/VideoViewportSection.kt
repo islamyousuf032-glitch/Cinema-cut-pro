@@ -70,25 +70,33 @@ fun VideoViewportSection(
         }
     }
 
-    LaunchedEffect(isPlaying) {
-        if (isPlaying) {
-            while (true) {
-                timelinePreviewController.updatePlayheadFromPlayer(
-                    onUpdateTimelineFrame = { posMs, tlStart, srcIn ->
-                        timelineViewModel.syncPlayheadFromPlayer(posMs, tlStart, srcIn)
-                    },
-                    onPlaybackEnded = {
-                        timelineViewModel.pausePlay()
-                    }
-                )
-                kotlinx.coroutines.delay(16)
-            }
+    DisposableEffect(timelinePreviewController, timelineViewModel) {
+        timelinePreviewController.onPlaybackEnded = { timelineViewModel.pausePlay() }
+        onDispose {
+            timelinePreviewController.onPlaybackEnded = null
         }
     }
 
-    LaunchedEffect(currentClip, playerState) {
-        if (playerError != null && currentAsset != null) {
-            timelineViewModel.markAssetPlaybackFailed(currentAsset!!.assetId)
+    var handledPlaybackError by remember { mutableStateOf<Pair<com.example.timeline.engine.preview.PreviewEngineType, String>?>(null) }
+    LaunchedEffect(currentAsset?.assetId, playerError, engineType, previewSettings.autoFallbackOnFailure) {
+        val error = playerError
+        val asset = currentAsset
+        if (error == null) {
+            handledPlaybackError = null
+            return@LaunchedEffect
+        }
+        val errorKey = engineType to error
+        if (handledPlaybackError == errorKey) return@LaunchedEffect
+        handledPlaybackError = errorKey
+
+        val isNativeFfmpegEngine = engineType == com.example.timeline.engine.preview.PreviewEngineType.FFMPEG_NATIVE ||
+            engineType == com.example.timeline.engine.preview.PreviewEngineType.VLC_NATIVE
+        if (isNativeFfmpegEngine && previewSettings.autoFallbackOnFailure) {
+            timelinePreviewController.setEngineType(com.example.timeline.engine.preview.PreviewEngineType.MEDIA3_FALLBACK)
+            editorViewModel.updateSelectedEngine(com.example.timeline.engine.preview.PreviewEngineType.MEDIA3_FALLBACK)
+            if (isPlaying) timelinePreviewController.play()
+        } else if (asset != null) {
+            timelineViewModel.markAssetPlaybackFailed(asset.assetId)
         }
     }
 
