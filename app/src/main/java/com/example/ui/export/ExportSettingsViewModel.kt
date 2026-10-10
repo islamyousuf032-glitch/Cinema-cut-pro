@@ -100,7 +100,7 @@ class ExportSettingsViewModel(application: Application) : AndroidViewModel(appli
         _uiState.update {
             it.copy(
                 validationResult = validationResult,
-                estimatedSizeMb = estimatedSizeMb,
+                estimatedSizeMb = estimatedSizeMb.toFloat(),
                 estimatedRenderTimeSec = (durationSec * 2).toLong()
             )
         }
