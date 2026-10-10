@@ -1,0 +1,85 @@
+name: Build and release Android test APK
+
+on:
+  push:
+    branches:
+      - arena/a2d6ebb0-cinema-cut-pro
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-test-release:
+    name: Build, test, and publish installable APK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android build components
+        run: |
+          sdkmanager --install \
+            "platforms;android-36" \
+            "platforms;android-36.1" \
+            "build-tools;36.0.0" \
+            "cmake;3.22.1" \
+            "ndk;27.2.12479018"
+
+      - name: Set up Gradle caching
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build debug APK and run JVM tests
+        run: ./gradlew --no-daemon --stacktrace :app:assembleDebug :app:testDebugUnitTest
+
+      - name: Run native C++ host tests
+        run: python3 tools/run_native_export_tests.py
+
+      - name: Prepare APK and checksum
+        id: apk
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          apk_name="Cinema-Cut-Pro-debug-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}.apk"
+          cp app/build/outputs/apk/debug/app-debug.apk "dist/${apk_name}"
+          sha256sum "dist/${apk_name}" > "dist/${apk_name}.sha256"
+          echo "name=${apk_name}" >> "$GITHUB_OUTPUT"
+          echo "tag=android-test-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+
+      - name: Save APK as a workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cinema-cut-pro-test-apk-${{ github.run_number }}-${{ github.run_attempt }}
+          path: |
+            dist/${{ steps.apk.outputs.name }}
+            dist/${{ steps.apk.outputs.name }}.sha256
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish test APK in GitHub Releases
+        if: github.ref == 'refs/heads/arena/a2d6ebb0-cinema-cut-pro'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APK_NAME: ${{ steps.apk.outputs.name }}
+          TAG_NAME: ${{ steps.apk.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release create "$TAG_NAME" \
+            --target "$GITHUB_SHA" \
+            --title "Cinema Cut Pro Android test APK #${GITHUB_RUN_NUMBER}" \
+            --notes "Installable debug-signed test build from commit ${GITHUB_SHA}. This APK is for device testing and is not a Play Store release. SHA-256 checksum is attached." \
+            --prerelease \
+            "dist/${APK_NAME}#Installable Android test APK" \
+            "dist/${APK_NAME}.sha256#SHA-256 checksum"

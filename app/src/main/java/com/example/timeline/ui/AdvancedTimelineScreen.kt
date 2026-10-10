@@ -1,0 +1,153 @@
+package com.example.timeline.ui
+
+import android.app.Activity
+import android.content.pm.ActivityInfo
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
+import com.example.ui.editor.EditorViewModel
+import com.example.timeline.core.CoreTimelineEngine
+import com.example.timeline.core.TimelineClip
+import com.example.timeline.core.TimelineProject
+import kotlinx.coroutines.launch
+
+import com.example.timeline.engine.preview.TimelinePreviewController
+
+@Composable
+fun AdvancedTimelineScreen(
+    timelineViewModel: TimelineViewModel,
+    editorViewModel: EditorViewModel,
+    timelinePreviewController: TimelinePreviewController,
+    onRelinkRequest: (String) -> Unit,
+    onClose: () -> Unit
+) {
+    val context = LocalContext.current
+    val uiState by timelineViewModel.uiState.collectAsState()
+    var showMiniViewport by remember { mutableStateOf(true) }
+    
+    // Tools State
+    val selectionController = remember(timelineViewModel, editorViewModel) { SelectionToolController(timelineViewModel, editorViewModel) }
+    val bladeController = remember(timelineViewModel) { BladeToolController(timelineViewModel) }
+    val trimController = remember(timelineViewModel, editorViewModel) { TrimToolController(timelineViewModel, editorViewModel) }
+    val rippleController = remember(timelineViewModel, editorViewModel) { RippleEditToolController(timelineViewModel, editorViewModel) }
+    val rollController = remember(timelineViewModel, editorViewModel) { RollEditToolController(timelineViewModel, editorViewModel) }
+    val slipController = remember(timelineViewModel, editorViewModel) { SlipToolController(timelineViewModel, editorViewModel) }
+    val slideController = remember(timelineViewModel, editorViewModel) { SlideToolController(timelineViewModel, editorViewModel) }
+    val trackController = remember(timelineViewModel) { TrackControlController(timelineViewModel) }
+    var rippleAllTracks by remember { mutableStateOf(false) }
+    var activeTool by remember { mutableStateOf(TimelineTool.SELECTION) }
+    var snapEnabled by remember { mutableStateOf(uiState.snapSettings.isSnappingEnabled) }
+    var linkedSelection by remember { mutableStateOf(true) }
+    val miniViewportController = remember { MiniViewportController() }
+    val density = androidx.compose.ui.platform.LocalDensity.current.density
+
+    val playheadFrame by editorViewModel.playheadFrame.collectAsState()
+    val isPlaying by timelineViewModel.isPlaying.collectAsState()
+
+    Surface(
+        modifier = Modifier.fillMaxSize(),
+        color = Color(0xFF141414)
+    ) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            AdvancedTimelineTopBar(
+                projectName = uiState.project.name,
+                playheadFrame = playheadFrame,
+                onClose = onClose,
+                onUndo = { timelineViewModel.undo() },
+                onRedo = { timelineViewModel.redo() },
+                snapEnabled = snapEnabled,
+                onToggleSnap = { 
+                    snapEnabled = !snapEnabled
+                    timelineViewModel.updateSnapSettings(uiState.snapSettings.copy(isSnappingEnabled = snapEnabled))
+                },
+                linkedSelection = linkedSelection,
+                onToggleLinked = { linkedSelection = !linkedSelection },
+                rippleAllTracks = rippleAllTracks,
+                onToggleRippleAllTracks = { rippleAllTracks = !rippleAllTracks },
+                showMiniViewport = showMiniViewport,
+                onToggleMiniViewport = { showMiniViewport = !showMiniViewport }
+            )
+            
+            Row(modifier = Modifier.weight(1f)) {
+                AdvancedTimelineToolPalette(
+                    activeTool = activeTool,
+                    onToolSelect = { activeTool = it }
+                )
+
+                Box(modifier = Modifier.weight(1f)) {
+                    AdvancedTimelineCanvas(
+                        uiState = uiState,
+                        playheadFrame = playheadFrame,
+                        isPlaying = isPlaying,
+                        activeTool = activeTool,
+                        snapEnabled = snapEnabled,
+                        linkedSelection = linkedSelection,
+                        onClipSelect = { id -> selectionController.handleTap(id) },
+                        onClipMoved = { id, start -> 
+                            val trackId = uiState.project.tracks.find { it.clips.any { c -> c.id == id } }?.id ?: ""
+                            selectionController.handleDragEnd(id, uiState.project.tracks.flatMap { it.clips }.find { it.id == id }?.timelineStart ?: 0L, start, trackId, linkedSelection)
+                        },
+                        onTrimStart = { id, start -> timelineViewModel.trimClipStart(id, start, linkedSelection) },
+                        onTrimEnd = { id, end -> timelineViewModel.trimClipEnd(id, end, linkedSelection) },
+                        onZoomChange = { zoom -> timelineViewModel.setZoom(zoom) },
+                        onRippleEdit = { id, frame, isStart -> 
+                            if (isStart) rippleController.rippleTrimStart(id, frame, rippleAllTracks) 
+                            else rippleController.rippleTrimEnd(id, frame, rippleAllTracks) 
+                        },
+                        onRollEdit = { id, diff, isStart -> rollController.handleRoll(id, diff, isStart) },
+                        onSlipEdit = { id, diff -> slipController.handleSlip(id, diff) },
+                        onSlideEdit = { id, diff -> slideController.handleSlide(id, diff) },
+                        onTrackLock = { id, locked -> trackController.toggleLock(id, locked) },
+                        onTrackEnable = { id, enabled -> trackController.toggleVisibility(id, enabled) },
+                        onTrackMute = { id, muted -> trackController.toggleMute(id, muted) },
+                        onTrackSolo = { id, solo -> trackController.toggleSolo(id, solo) },
+                        onRenameTrack = { id, name -> timelineViewModel.renameTrack(id, name) },
+                        onDeleteTrack = { id -> timelineViewModel.deleteTrack(id) },
+                        onMoveTrack = { id, index -> timelineViewModel.moveTrack(id, index) },
+                        onPlayheadMoved = { frame -> editorViewModel.updatePlayheadFrame(frame); timelineViewModel.setPlayheadFrame(frame) },
+                        onBladeCut = { id, frame -> bladeController.handleTap(id, frame, linkedSelection) },
+                        onTrimStartToPlayhead = { trimController.trimSelectedStartToPlayhead() },
+                        onTrimEndToPlayhead = { trimController.trimSelectedEndToPlayhead() }
+                    )
+
+                    if (showMiniViewport) {
+                        Box(
+                            modifier = Modifier
+                                .align(androidx.compose.ui.Alignment.TopEnd)
+                                .padding(16.dp)
+                                .size(width = miniViewportController.width, height = miniViewportController.height)
+                        ) {
+                            AdvancedTimelineMiniViewport(
+                                timelineUiState = uiState,
+                                timelineViewModel = timelineViewModel,
+                                editorViewModel = editorViewModel,
+                                timelinePreviewController = timelinePreviewController,
+                                playheadFrame = playheadFrame,
+                                isPlaying = isPlaying,
+                                onRelinkRequest = onRelinkRequest,
+                                onClose = { showMiniViewport = false }
+                            )
+                            ViewportResizeHandle(
+                                modifier = Modifier.align(androidx.compose.ui.Alignment.BottomStart),
+                                onDrag = { dx, dy ->
+                                    miniViewportController.resize(dx, dy, density)
+                                }
+                            )
+                        }
+                    }
+                }
+
+                AdvancedTimelineInspector(
+                    activeTool = activeTool,
+                    selectedClipId = uiState.selectedClipId,
+                    project = uiState.project
+                )
+            }
+        }
+    }
+}

@@ -1,0 +1,196 @@
+package com.example.timeline.engine.preview
+
+import android.content.Context
+import android.net.Uri
+import android.view.Surface
+import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
+import androidx.media3.exoplayer.ExoPlayer
+import com.example.model.adjustments.AdjustmentStack
+import com.example.model.adjustments.engine.VideoEffectGraph
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.delay
+import com.example.model.adjustments.VideoAdjustmentParams
+
+class Media3FallbackPreviewEngine(context: Context) : PreviewEngine {
+    override val engineType = PreviewEngineType.MEDIA3_FALLBACK
+
+    override val capabilities: PreviewEngineCapabilities = PreviewEngineCapabilities(
+        canPlayMovingVideo = true,
+        canScrub = true,
+        canRenderFirstFrame = true,
+        canApplyRealtimeColorGrade = true, // Media3 with custom ExoPlayer video effects
+        canApplyBasicAdjustments = true,
+        canUseProxy = true,
+        currentFailureReason = null
+    )
+    
+    private val _currentState = MutableStateFlow(PreviewState.IDLE)
+    override val currentState: StateFlow<PreviewState> = _currentState.asStateFlow()
+    
+    private val _currentError = MutableStateFlow<String?>(null)
+    override val currentError: StateFlow<String?> = _currentError.asStateFlow()
+    
+    private val _firstFrameRendered = MutableStateFlow(false)
+    override val firstFrameRendered: StateFlow<Boolean> = _firstFrameRendered.asStateFlow()
+    
+    val exoPlayer: ExoPlayer = ExoPlayer.Builder(context).build()
+    private val effectGraph = VideoEffectGraph(context)
+    private val colorGradePipeline = ColorGradeRenderPipeline(effectGraph)
+    
+    // For legacy compat in codebase
+    private val _state = MutableStateFlow(PreviewPlayerState())
+    val state: StateFlow<PreviewPlayerState> = _state.asStateFlow()
+
+    private var currentUri: String? = null
+
+    override var onTimeChanged: ((Long) -> Unit)? = null
+
+    private var timeTrackerJob: kotlinx.coroutines.Job? = null
+    private val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main + kotlinx.coroutines.SupervisorJob())
+
+    init {
+        exoPlayer.addListener(object : Player.Listener {
+            override fun onRenderedFirstFrame() {
+                android.util.Log.d("PLAYER_MEDIA3", "onRenderedFirstFrame called")
+                _firstFrameRendered.value = true
+            }
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                _state.update { it.copy(
+                    isReady = playbackState == Player.STATE_READY,
+                    error = if (playbackState == Player.STATE_IDLE && exoPlayer.playerError != null) {
+                        exoPlayer.playerError?.message ?: "Playback Error"
+                    } else it.error
+                )}
+                when (playbackState) {
+                    Player.STATE_BUFFERING -> _currentState.value = PreviewState.LOADING
+                    Player.STATE_READY -> _currentState.value = if(exoPlayer.isPlaying) PreviewState.PLAYING else PreviewState.READY
+                    Player.STATE_IDLE -> {
+                        if (exoPlayer.playerError != null) {
+                            _currentError.value = exoPlayer.playerError?.message
+                            _currentState.value = PreviewState.ERROR
+                        }
+                    }
+                }
+            }
+
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                _state.update { it.copy(isPlaying = isPlaying) }
+                if (isPlaying) {
+                    _currentState.value = PreviewState.PLAYING
+                    startTimeTracker()
+                } else {
+                    if (exoPlayer.playbackState == Player.STATE_READY) _currentState.value = PreviewState.READY
+                    stopTimeTracker()
+                }
+            }
+
+            override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                _state.update { it.copy(error = error.message) }
+                _currentError.value = error.message
+                _currentState.value = PreviewState.ERROR
+                stopTimeTracker()
+            }
+        })
+        try {
+            exoPlayer.setVideoEffects(effectGraph.getEffects())
+            android.util.Log.d("PLAYER_MEDIA3", "Enabled setVideoEffects for real-time color grading")
+        } catch(e: Exception) {
+            e.printStackTrace()
+        }
+    }
+    
+    private fun startTimeTracker() {
+        if (timeTrackerJob?.isActive == true) return
+        timeTrackerJob = scope.launch {
+            while (isActive && exoPlayer.isPlaying) {
+                onTimeChanged?.invoke(exoPlayer.currentPosition * 1000L)
+                delay(1000 / 30) // 30fps
+            }
+        }
+    }
+
+    private fun stopTimeTracker() {
+        timeTrackerJob?.cancel()
+        timeTrackerJob = null
+    }
+    
+    override fun setSurface(surface: Surface?) {
+        exoPlayer.setVideoSurface(surface)
+    }
+
+    override fun loadMedia(uriString: String, useProxy: Boolean, sourcePositionMs: Long, evaluatedParams: VideoAdjustmentParams?, presentationTimeUs: Long) {
+        android.util.Log.d("PLAYER_MEDIA3", "Loading media uri: $uriString at $sourcePositionMs ms. Using proxy: $useProxy")
+        _currentState.value = PreviewState.LOADING
+        
+        if (evaluatedParams != null) {
+            effectGraph.setParams(evaluatedParams)
+            if (!exoPlayer.isPlaying && currentUri == uriString) {
+                // Force a re-render from paused state
+                exoPlayer.seekTo(sourcePositionMs)
+            }
+        }
+        
+        if (currentUri == uriString) {
+            if (Math.abs(exoPlayer.currentPosition - sourcePositionMs) > 100) {
+                exoPlayer.seekTo(sourcePositionMs)
+            }
+            return
+        }
+        currentUri = uriString
+        _firstFrameRendered.value = false
+        _state.update { it.copy(error = null, usingProxy = useProxy, isReady = false) }
+        
+        val mediaItem = MediaItem.fromUri(Uri.parse(uriString))
+        exoPlayer.setMediaItem(mediaItem, sourcePositionMs)
+        exoPlayer.prepare()
+    }
+
+    fun clearMedia() {
+        if (currentUri == null) return
+        currentUri = null
+        exoPlayer.clearMediaItems()
+        _state.update { it.copy(error = null, usingProxy = false, isReady = false) }
+        _currentState.value = PreviewState.IDLE
+    }
+
+    override fun play() {
+        if (currentUri != null) {
+            exoPlayer.play()
+        }
+    }
+
+    override fun pause() {
+        exoPlayer.pause()
+    }
+
+    fun togglePlayPause() {
+        if (exoPlayer.isPlaying) pause() else play()
+    }
+    
+    override fun seekTo(timeUs: Long) {
+        exoPlayer.seekTo(timeUs / 1000)
+    }
+
+    override fun setPlaybackSpeed(speed: Float) {
+        exoPlayer.setPlaybackSpeed(speed)
+    }
+
+    override fun setResolutionFallback(resolutionMode: String) {
+        // Fallback or specific player property
+    }
+
+    override fun release() {
+        effectGraph.release()
+        exoPlayer.release()
+    }
+    
+    override val currentPositionUs: Long get() = exoPlayer.currentPosition * 1000
+    override val durationUs: Long get() = exoPlayer.duration * 1000
+    override val isPlaying: Boolean get() = exoPlayer.isPlaying
+}
