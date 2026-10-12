@@ -5,7 +5,9 @@ import android.net.Uri
 import android.view.Surface
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.analytics.AnalyticsListener
 import com.example.model.adjustments.engine.VideoEffectGraph
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -16,6 +18,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.delay
 import com.example.model.adjustments.VideoAdjustmentParams
 
+@OptIn(UnstableApi::class)
 class Media3FallbackPreviewEngine(context: Context) : PreviewEngine {
     override val engineType = PreviewEngineType.MEDIA3_FALLBACK
 
@@ -40,6 +43,8 @@ class Media3FallbackPreviewEngine(context: Context) : PreviewEngine {
     
     val exoPlayer: ExoPlayer = ExoPlayer.Builder(context).build()
     private val effectGraph = VideoEffectGraph(context)
+    private val _playbackMetrics = MutableStateFlow(PreviewPlaybackMetrics())
+    val playbackMetrics: StateFlow<PreviewPlaybackMetrics> = _playbackMetrics.asStateFlow()
     
     // For legacy compat in codebase
     private val _state = MutableStateFlow(PreviewPlayerState())
@@ -58,7 +63,7 @@ class Media3FallbackPreviewEngine(context: Context) : PreviewEngine {
     init {
         exoPlayer.addListener(object : Player.Listener {
             override fun onRenderedFirstFrame() {
-                android.util.Log.d("PLAYER_MEDIA3", "onRenderedFirstFrame called")
+                if (com.example.BuildConfig.DEBUG) android.util.Log.d("PLAYER_MEDIA3", "onRenderedFirstFrame called")
                 _firstFrameRendered.value = true
             }
             override fun onPlaybackStateChanged(playbackState: Int) {
@@ -106,11 +111,62 @@ class Media3FallbackPreviewEngine(context: Context) : PreviewEngine {
                 stopTimeTracker()
             }
         })
+        exoPlayer.addAnalyticsListener(object : AnalyticsListener {
+            override fun onVideoDecoderInitialized(
+                eventTime: AnalyticsListener.EventTime,
+                decoderName: String,
+                initializedTimestampMs: Long,
+                initializationDurationMs: Long
+            ) {
+                _playbackMetrics.update {
+                    it.copy(
+                        videoDecoderName = decoderName,
+                        decoderInitializationDurationMs = initializationDurationMs
+                    )
+                }
+            }
+
+            override fun onDroppedVideoFrames(
+                eventTime: AnalyticsListener.EventTime,
+                droppedFrames: Int,
+                elapsedMs: Long
+            ) {
+                _playbackMetrics.update {
+                    it.copy(
+                        droppedVideoFrames = it.droppedVideoFrames + droppedFrames.coerceAtLeast(0),
+                        droppedFrameReportWindowMs = elapsedMs.coerceAtLeast(0L)
+                    )
+                }
+            }
+
+            override fun onVideoFrameProcessingOffset(
+                eventTime: AnalyticsListener.EventTime,
+                totalProcessingOffsetUs: Long,
+                frameCount: Int
+            ) {
+                if (frameCount <= 0) return
+                val averageOffsetMs = totalProcessingOffsetUs.toDouble()
+                    .div(frameCount.toDouble())
+                    .div(1_000.0)
+                    .toFloat()
+                _playbackMetrics.update {
+                    it.copy(
+                        averageVideoFrameProcessingOffsetMs = averageOffsetMs,
+                        processedVideoFrameSamples = it.processedVideoFrameSamples + frameCount,
+                        lateFrameProcessingWindows = it.lateFrameProcessingWindows +
+                            if (averageOffsetMs < 0f) 1L else 0L
+                    )
+                }
+            }
+        })
+
         try {
             exoPlayer.setVideoEffects(effectGraph.getEffects())
-            android.util.Log.d("PLAYER_MEDIA3", "Enabled setVideoEffects for real-time color grading")
-        } catch(e: Exception) {
-            e.printStackTrace()
+            if (com.example.BuildConfig.DEBUG) android.util.Log.d("PLAYER_MEDIA3", "Enabled shared GLSL color effect for preview")
+        } catch (e: Exception) {
+            _currentError.value = "GPU color grading could not initialize: ${e.message ?: e.javaClass.simpleName}"
+            _currentState.value = PreviewState.ERROR
+            if (com.example.BuildConfig.DEBUG) android.util.Log.e("Media3PreviewPlayer", "Failed to initialize the video effect graph", e)
         }
     }
     
@@ -170,7 +226,7 @@ class Media3FallbackPreviewEngine(context: Context) : PreviewEngine {
         presentationTimeUs: Long,
         forceSeek: Boolean
     ) {
-        android.util.Log.d("PLAYER_MEDIA3", "Loading media uri: $uriString at $sourcePositionMs ms. Using proxy: $useProxy")
+        if (com.example.BuildConfig.DEBUG) android.util.Log.d("PLAYER_MEDIA3", "Loading media at $sourcePositionMs ms; proxy=$useProxy")
         
         if (evaluatedParams != null) {
             // The GlEffect reads this value on Media3's GL thread. The effect parameters are
@@ -204,6 +260,7 @@ class Media3FallbackPreviewEngine(context: Context) : PreviewEngine {
         }
         cancelPausedGradeRefresh()
         lastPausedGradeRefreshMs = 0L
+        _playbackMetrics.value = PreviewPlaybackMetrics()
         _currentState.value = PreviewState.LOADING
         currentUri = uriString
         _firstFrameRendered.value = false

@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import com.example.model.colorgrade.GradeAutosaveHook
 import com.example.model.colorgrade.commands.*
 import com.example.model.colorgrade.ColorGradeStack
+import com.example.model.colorgrade.engine.PrimaryWheelAdjustmentMapper
 import com.example.model.colorgrade.GradeKeyframeManager
 
 class ColorAdjustmentViewModel(
@@ -232,11 +233,11 @@ class ColorAdjustmentViewModel(
         // Ensure the preview uses the evaluated grade
         // We will return the mapped params
         val newGrade = evaluatedGrade
-        return com.example.model.adjustments.VideoAdjustmentParams.default().copy(
-                lift = com.example.model.adjustments.Vector3(newGrade.primaryCorrections.lift.r, newGrade.primaryCorrections.lift.g, newGrade.primaryCorrections.lift.b),
-                gamma = com.example.model.adjustments.Vector3(newGrade.primaryCorrections.gamma.r + 1f, newGrade.primaryCorrections.gamma.g + 1f, newGrade.primaryCorrections.gamma.b + 1f),
-                gain = com.example.model.adjustments.Vector3(newGrade.primaryCorrections.gain.r + 1f, newGrade.primaryCorrections.gain.g + 1f, newGrade.primaryCorrections.gain.b + 1f),
-                offsetWheel = com.example.model.adjustments.Vector3(newGrade.primaryCorrections.offset.r, newGrade.primaryCorrections.offset.g, newGrade.primaryCorrections.offset.b),
+        val wheelParams = PrimaryWheelAdjustmentMapper.apply(
+            com.example.model.adjustments.VideoAdjustmentParams.default(),
+            newGrade.primaryCorrections
+        )
+        return wheelParams.copy(
                 shadowColorBalance = com.example.model.adjustments.Vector3(newGrade.primaryCorrections.shadows.r, newGrade.primaryCorrections.shadows.g, newGrade.primaryCorrections.shadows.b),
                 midtoneColorBalance = com.example.model.adjustments.Vector3(newGrade.primaryCorrections.midtones.r, newGrade.primaryCorrections.midtones.g, newGrade.primaryCorrections.midtones.b),
                 highlightColorBalance = com.example.model.adjustments.Vector3(newGrade.primaryCorrections.highlights.r, newGrade.primaryCorrections.highlights.g, newGrade.primaryCorrections.highlights.b),
@@ -339,11 +340,8 @@ class ColorAdjustmentViewModel(
             
             // Map ColorGradeStack -> VideoAdjustmentParams to affect GPU preview/export immediately
             val currentParams = oldClip.adjustments.params
-            val newParams = currentParams.copy(
-                lift = com.example.model.adjustments.Vector3(newGrade.primaryCorrections.lift.r, newGrade.primaryCorrections.lift.g, newGrade.primaryCorrections.lift.b),
-                gamma = com.example.model.adjustments.Vector3(newGrade.primaryCorrections.gamma.r + 1f, newGrade.primaryCorrections.gamma.g + 1f, newGrade.primaryCorrections.gamma.b + 1f),
-                gain = com.example.model.adjustments.Vector3(newGrade.primaryCorrections.gain.r + 1f, newGrade.primaryCorrections.gain.g + 1f, newGrade.primaryCorrections.gain.b + 1f),
-                offsetWheel = com.example.model.adjustments.Vector3(newGrade.primaryCorrections.offset.r, newGrade.primaryCorrections.offset.g, newGrade.primaryCorrections.offset.b),
+            val wheelParams = PrimaryWheelAdjustmentMapper.apply(currentParams, newGrade.primaryCorrections)
+            val newParams = wheelParams.copy(
                 shadowColorBalance = com.example.model.adjustments.Vector3(newGrade.primaryCorrections.shadows.r, newGrade.primaryCorrections.shadows.g, newGrade.primaryCorrections.shadows.b),
                 midtoneColorBalance = com.example.model.adjustments.Vector3(newGrade.primaryCorrections.midtones.r, newGrade.primaryCorrections.midtones.g, newGrade.primaryCorrections.midtones.b),
                 highlightColorBalance = com.example.model.adjustments.Vector3(newGrade.primaryCorrections.highlights.r, newGrade.primaryCorrections.highlights.g, newGrade.primaryCorrections.highlights.b),
@@ -376,12 +374,7 @@ class ColorAdjustmentViewModel(
                 qualLum = newGrade.hslAdjustments.luminance,
                 qualContrast = newGrade.hslAdjustments.contrast,
                 qualTemp = newGrade.hslAdjustments.temperature,
-                qualTint = newGrade.hslAdjustments.tint,
-                exposureStops = newGrade.primaryCorrections.exposure,
-                contrast = newGrade.primaryCorrections.contrast,
-                saturation = newGrade.primaryCorrections.saturation,
-                temperature = newGrade.primaryCorrections.temperature,
-                tint = newGrade.primaryCorrections.tint
+                qualTint = newGrade.hslAdjustments.tint
             )
             val newAdjustments = oldClip.adjustments.copy(params = newParams)
             

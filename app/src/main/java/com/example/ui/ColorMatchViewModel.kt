@@ -134,7 +134,7 @@ class ColorMatchViewModel(
             retriever.setDataSource(context, Uri.parse(uriString))
             retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
         } catch (e: Exception) {
-            e.printStackTrace()
+            if (com.example.BuildConfig.DEBUG) e.printStackTrace()
             null
         } finally {
             retriever?.release()

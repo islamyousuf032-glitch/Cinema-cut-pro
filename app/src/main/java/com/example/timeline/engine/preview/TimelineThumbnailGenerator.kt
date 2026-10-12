@@ -75,7 +75,7 @@ object TimelineThumbnailGenerator {
                         Bitmap.createScaledBitmap(frame, w, h, true)
                     } else null
                 } catch (e: Exception) {
-                    e.printStackTrace()
+                    if (com.example.BuildConfig.DEBUG) e.printStackTrace()
                     null
                 } finally {
                     mmr?.release()

@@ -81,7 +81,7 @@ class ScopeViewModel : ViewModel() {
                 request.bitmap.recycleSafely()
                 throw cancelled
             } catch (error: Exception) {
-                android.util.Log.w("ScopeViewModel", "Scope analysis failed", error)
+                if (com.example.BuildConfig.DEBUG) android.util.Log.w("ScopeViewModel", "Scope analysis failed", error)
                 request.bitmap.recycleSafely()
             }
         }

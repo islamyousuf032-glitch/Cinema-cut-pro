@@ -129,7 +129,7 @@ class StillFramePreviewEngine(private val context: Context) : PreviewEngine {
                             cachedTimeMs = timeMsToLoad
                         }
                     } catch (e: Exception) {
-                        e.printStackTrace()
+                        if (com.example.BuildConfig.DEBUG) e.printStackTrace()
                     } finally {
                         mmr.release()
                     }
@@ -171,13 +171,13 @@ class StillFramePreviewEngine(private val context: Context) : PreviewEngine {
                             canvas.drawBitmap(gradedBitmap, null, drawRect, Paint())
                         }
                     } catch (e: Exception) {
-                        e.printStackTrace()
+                        if (com.example.BuildConfig.DEBUG) e.printStackTrace()
                     } finally {
                         if (canvas != null) {
                             try {
                                 s.unlockCanvasAndPost(canvas)
                             } catch (e: Exception) {
-                                e.printStackTrace()
+                                if (com.example.BuildConfig.DEBUG) e.printStackTrace()
                             }
                         }
                         _firstFrameRendered.value = true
@@ -187,7 +187,7 @@ class StillFramePreviewEngine(private val context: Context) : PreviewEngine {
                     }
                 }
             } catch (e: Exception) {
-                e.printStackTrace()
+                if (com.example.BuildConfig.DEBUG) e.printStackTrace()
             }
         }
     }

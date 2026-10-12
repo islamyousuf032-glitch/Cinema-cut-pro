@@ -5,7 +5,9 @@ object NativePlayerBridge {
         try {
             System.loadLibrary("native_player")
         } catch (e: UnsatisfiedLinkError) {
-            android.util.Log.e("NativePlayerBridge", "Failed to load native_player", e)
+            if (com.example.BuildConfig.DEBUG) {
+                android.util.Log.d("NativePlayerBridge", "Optional native_player library is unavailable", e)
+            }
         }
     }
 

@@ -115,7 +115,7 @@ class NativeVlcPreviewEngine(
             MediaPlayer.Event.EncounteredError -> {
                 cancelPauseAfterFirstFrame()
                 _currentState.value = PreviewState.ERROR
-                _currentError.value = "FFmpeg/LibVLC playback error"
+                _currentError.value = "LibVLC playback error"
             }
             MediaPlayer.Event.Vout -> {
                 if (event.voutCount > 0) videoOutputReady = true

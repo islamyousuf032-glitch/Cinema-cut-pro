@@ -30,6 +30,30 @@ class TimelinePreviewController(private val context: Context) {
 
     private var activeProject: TimelineProject? = null
     private var lastPlayheadFrame: Long = 0L
+    @Volatile private var colorGradeBypassed: Boolean = false
+    @Volatile private var preferProxyPlayback: Boolean = true
+
+    private fun evaluatedPreviewParams(project: TimelineProject, frame: Long): VideoAdjustmentParams =
+        if (colorGradeBypassed) VideoAdjustmentParams.default()
+        else com.example.timeline.engine.GradeEvaluationEngine.evaluateFrame(project, frame)
+
+    /** Preview-only grade bypass; it never edits or saves the project. */
+    fun setColorGradeBypassed(bypassed: Boolean) {
+        if (colorGradeBypassed == bypassed) return
+        colorGradeBypassed = bypassed
+        activeProject?.let { project ->
+            seekToTimelineFrame(project, lastPlayheadFrame, forceSeek = false)
+        }
+    }
+
+    /** Selects the source for smooth (proxy-first) versus color-accurate (original-first) preview. */
+    fun setPreferProxyPlayback(preferProxy: Boolean) {
+        if (preferProxyPlayback == preferProxy) return
+        preferProxyPlayback = preferProxy
+        activeProject?.let { project ->
+            seekToTimelineFrame(project, lastPlayheadFrame, forceSeek = true)
+        }
+    }
 
     private val _activeClip = MutableStateFlow<TimelineClip?>(null)
     val activeClip: StateFlow<TimelineClip?> = _activeClip.asStateFlow()
@@ -127,9 +151,8 @@ class TimelinePreviewController(private val context: Context) {
                 val sourceFrame = TimelineFrameResolver.resolveSourceFrame(lastPlayheadFrame, clip)
                 val sourcePositionUs = TimelineFrameResolver.convertFrameToMicroseconds(sourceFrame, rat.numerator, rat.denominator)
                 val sourcePositionMs = sourcePositionUs / 1000
-                val (playableUri, useProxy) = PreviewSourceResolver.resolvePlayableUri(asset, preferProxy = true)
-                    .let { (uri, isProxy) -> uri to isProxy }
-                val evaluatedParams = com.example.timeline.engine.GradeEvaluationEngine.evaluateFrame(activeProject!!, lastPlayheadFrame)
+                val (playableUri, useProxy) = PreviewSourceResolver.resolvePlayableUri(asset, preferProxy = preferProxyPlayback)
+                val evaluatedParams = evaluatedPreviewParams(activeProject!!, lastPlayheadFrame)
                 
                 if (!playableUri.isNullOrBlank()) {
                     newEngine.loadMedia(playableUri, useProxy, sourcePositionMs, evaluatedParams, sourcePositionUs)
@@ -149,7 +172,9 @@ class TimelinePreviewController(private val context: Context) {
                 oldEngine.release()
             }
         } catch (e: Exception) {
-            android.util.Log.e("TimelinePreviewController", "Failed to switch engine to \$type", e)
+            if (com.example.BuildConfig.DEBUG) {
+                android.util.Log.e("TimelinePreviewController", "Failed to switch engine to $type", e)
+            }
         }
     }
 
@@ -170,7 +195,6 @@ class TimelinePreviewController(private val context: Context) {
     }
 
     private fun loadClipAtPlayhead(project: TimelineProject, playheadFrame: Long, forceSeek: Boolean) {
-        android.util.Log.d("VIEWPORT_PREVIEW", "resolving frame=$playheadFrame")
         val topClip = TimelineFrameResolver.getTopmostVisibleVideoClip(project, playheadFrame)
         if (topClip == null) {
             _activeClip.value = null
@@ -182,8 +206,6 @@ class TimelinePreviewController(private val context: Context) {
             return
         }
         
-        android.util.Log.d("VIEWPORT_PREVIEW", "found clipId=${topClip.id}")
-
         val asset = project.mediaAssets.find { it.assetId == topClip.mediaId }
         val prevClipId = _activeClip.value?.id
 
@@ -198,19 +220,17 @@ class TimelinePreviewController(private val context: Context) {
             return
         }
 
-        android.util.Log.d("VIEWPORT_PREVIEW", "assetId=${asset.assetId}")
-
         val sourceFrame = TimelineFrameResolver.resolveSourceFrame(playheadFrame, topClip)
         val rat = project.settings.getFpsRational()
         val sourcePositionMs = TimelineFrameResolver.convertFrameToMicroseconds(sourceFrame, rat.numerator, rat.denominator) / 1000
         val sourcePositionUs = sourcePositionMs * 1000
 
-        val evaluatedParams = com.example.timeline.engine.GradeEvaluationEngine.evaluateFrame(project, playheadFrame)
+        val evaluatedParams = evaluatedPreviewParams(project, playheadFrame)
 
         // Prefer a ready proxy for editor playback. The proxy is generated at a predictable
         // preview resolution and retains the source frame rate, so timeline timecode/audio sync
         // continue to use the same source-time mapping.
-        val (uriToUse, useProxy) = PreviewSourceResolver.resolvePlayableUri(asset, preferProxy = true)
+        val (uriToUse, useProxy) = PreviewSourceResolver.resolvePlayableUri(asset, preferProxy = preferProxyPlayback)
 
         if (uriToUse.isNullOrBlank()) {
             val eng = previewEngine

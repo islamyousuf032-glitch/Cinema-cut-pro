@@ -6,8 +6,9 @@ import kotlinx.coroutines.flow.StateFlow
 
 enum class PreviewEngineType(val displayName: String) {
     AUTO("Auto"),
-    FFMPEG_NATIVE("FFmpeg / LibVLC"),
-    VLC_NATIVE("Native VLC (legacy)"),
+    // Retained for settings compatibility; this route is implemented by LibVLC, not a C++ FFmpeg player.
+    FFMPEG_NATIVE("LibVLC (FFmpeg decoding)"),
+    VLC_NATIVE("LibVLC (legacy setting)"),
     MEDIA3_FALLBACK("Media3"),
     BROWSER("WebView/Browser"),
     STILL_FRAME("Still Frame"),

@@ -10,12 +10,14 @@ object PreviewEngineFactory {
             PreviewEngineType.FFMPEG_NATIVE,
             PreviewEngineType.VLC_NATIVE -> {
                 if (isRunningUnderRobolectric(context)) {
-                    android.util.Log.d("PreviewEngineFactory", "Using Media3 in Robolectric; native LibVLC is not loaded in JVM tests")
+                    if (com.example.BuildConfig.DEBUG) android.util.Log.d("PreviewEngineFactory", "Using Media3 in Robolectric; LibVLC is not loaded in JVM tests")
                     return com.example.timeline.engine.preview.Media3FallbackPreviewEngine(context)
                 }
                 val nativeEngine = createLibVlcEngine(context, targetType)
                 if (nativeEngine != null) return nativeEngine
-                android.util.Log.w("PreviewEngineFactory", "FFmpeg/LibVLC unavailable; falling back to Media3")
+                if (com.example.BuildConfig.DEBUG) {
+                    android.util.Log.d("PreviewEngineFactory", "LibVLC unavailable; falling back to Media3")
+                }
                 return com.example.timeline.engine.preview.Media3FallbackPreviewEngine(context)
             }
             PreviewEngineType.MEDIA3_FALLBACK -> {
@@ -45,7 +47,9 @@ object PreviewEngineFactory {
             Class.forName("org.videolan.libvlc.LibVLC")
             com.example.timeline.engine.preview.native.NativeVlcPreviewEngine(context, type)
         }.onFailure { error ->
-            android.util.Log.e("PreviewEngineFactory", "FFmpeg/LibVLC initialization failed", error)
+            if (com.example.BuildConfig.DEBUG) {
+                android.util.Log.e("PreviewEngineFactory", "LibVLC initialization failed", error)
+            }
         }.getOrNull() ?: return null
 
         if (engine.currentState.value == PreviewState.ERROR) {

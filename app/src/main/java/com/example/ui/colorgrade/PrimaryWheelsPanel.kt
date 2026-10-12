@@ -117,21 +117,22 @@ fun PrimaryWheelsPanel(
         
         Spacer(modifier = Modifier.height(16.dp))
         
-        // Debug Diagnostics
-        val renderer = androidx.compose.runtime.remember { com.example.ui.colorgrade.ColorWheelRenderer() }
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(Color(0xFF1E1F22), shape = MaterialTheme.shapes.medium)
-                .padding(16.dp)
-        ) {
-            Text("DEVICE RENDER DIAGNOSTICS", color = Color.White, fontSize = 12.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
-            Spacer(modifier = Modifier.height(8.dp))
-            Text("Model: ${com.example.ui.colorgrade.DeviceRenderDiagnostics.deviceModel} (${com.example.ui.colorgrade.DeviceRenderDiagnostics.deviceManufacturer})", color = Color.LightGray, fontSize = 11.sp)
-            Text("Android: ${com.example.ui.colorgrade.DeviceRenderDiagnostics.androidVersion} (API ${com.example.ui.colorgrade.DeviceRenderDiagnostics.sdkInt})", color = Color.LightGray, fontSize = 11.sp)
-            Text("Render Mode: ${renderer.activeMode.name}", color = Color.Green, fontSize = 11.sp)
-            if (renderer.activeMode != com.example.ui.colorgrade.ColorWheelRenderMode.COMPOSE_SWEEP_GRADIENT) {
-                Text("Fallback Reason: ${renderer.fallbackReason}", color = Color.Yellow, fontSize = 11.sp)
+        if (com.example.BuildConfig.DEBUG) {
+            val renderer = androidx.compose.runtime.remember { com.example.ui.colorgrade.ColorWheelRenderer() }
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color(0xFF1E1F22), shape = MaterialTheme.shapes.medium)
+                    .padding(16.dp)
+            ) {
+                Text("DEVICE RENDER DIAGNOSTICS", color = Color.White, fontSize = 12.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+                Spacer(modifier = Modifier.height(8.dp))
+                Text("Model: ${com.example.ui.colorgrade.DeviceRenderDiagnostics.deviceModel} (${com.example.ui.colorgrade.DeviceRenderDiagnostics.deviceManufacturer})", color = Color.LightGray, fontSize = 11.sp)
+                Text("Android: ${com.example.ui.colorgrade.DeviceRenderDiagnostics.androidVersion} (API ${com.example.ui.colorgrade.DeviceRenderDiagnostics.sdkInt})", color = Color.LightGray, fontSize = 11.sp)
+                Text("Render Mode: ${renderer.activeMode.name}", color = Color.Green, fontSize = 11.sp)
+                if (renderer.activeMode != com.example.ui.colorgrade.ColorWheelRenderMode.COMPOSE_SWEEP_GRADIENT) {
+                    Text("Fallback Reason: ${renderer.fallbackReason}", color = Color.Yellow, fontSize = 11.sp)
+                }
             }
         }
     }

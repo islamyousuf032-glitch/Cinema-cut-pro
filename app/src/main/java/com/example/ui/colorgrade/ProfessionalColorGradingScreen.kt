@@ -115,6 +115,7 @@ fun ProfessionalColorGradingScreen(
             if (latestIsPlaying) previewController.play()
         }
         onDispose {
+            previewController.setColorGradeBypassed(false)
             if (needsMedia3ForLiveGrade &&
                 previewController.engineTypeFlow.value == PreviewEngineType.MEDIA3_FALLBACK &&
                 engineToRestore != PreviewEngineType.MEDIA3_FALLBACK
@@ -135,8 +136,7 @@ fun ProfessionalColorGradingScreen(
     var selectedTab by remember { mutableStateOf(0) }
     val tabs = listOf("Wheels", "Curves", "HSL", "LUT", "Match", "Scopes")
 
-    val displayStack = if (showBefore) activeClip.adjustments.copy(enabled = false) else activeClip.adjustments
-    val params = displayStack.evaluateParamsAtFrame(playheadFrame)
+    val params = activeClip.adjustments.evaluateParamsAtFrame(playheadFrame)
     val isAnalyzingScopes by scopeViewModel.isAnalyzing.collectAsState()
 
     LaunchedEffect(selectedTab) {
@@ -157,7 +157,7 @@ fun ProfessionalColorGradingScreen(
     }
 
     LaunchedEffect(showBefore) {
-        timelineViewModel.updateClipAdjustments(activeClip.id, displayStack)
+        previewController.setColorGradeBypassed(showBefore)
     }
 
     Box(modifier = Modifier.fillMaxSize()) {

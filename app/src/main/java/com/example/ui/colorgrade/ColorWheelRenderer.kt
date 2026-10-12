@@ -17,7 +17,7 @@ class ColorWheelRenderer {
 
     private fun determineBestMode() {
         if (DeviceRenderDiagnostics.isSweepGradientBuggy()) {
-            fallbackReason = "Device known for SweepGradient bugs"
+            fallbackReason = "Provisional model-name fallback; not device-verified"
             switchToBitmapMode()
         }
     }
@@ -34,7 +34,7 @@ class ColorWheelRenderer {
             }
         } catch (e: Exception) {
             fallbackReason = "CPU generator crashed: ${e.message}"
-            Log.e("ColorWheelRenderer", "CPU fallback failed", e)
+            if (com.example.BuildConfig.DEBUG) Log.e("ColorWheelRenderer", "CPU fallback failed", e)
         }
         
         // Try Native next based on priority 4
@@ -49,10 +49,10 @@ class ColorWheelRenderer {
             }
         } catch (e: Exception) {
             fallbackReason = "Native generator crashed: ${e.message}"
-            Log.e("ColorWheelRenderer", "Native fallback failed", e)
+            if (com.example.BuildConfig.DEBUG) Log.e("ColorWheelRenderer", "Native fallback failed", e)
         } catch (e: UnsatisfiedLinkError) {
             fallbackReason = "Native library not loaded"
-            Log.e("ColorWheelRenderer", "Native fallback failed", e)
+            if (com.example.BuildConfig.DEBUG) Log.e("ColorWheelRenderer", "Native fallback failed", e)
         }
 
         // If all fail, we just stay on CPU and hope for the best

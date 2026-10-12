@@ -1,6 +1,7 @@
 package com.example.ui.colorgrade
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -32,6 +33,7 @@ fun ColorControlSlider(
     val latestValue = rememberUpdatedState(value)
     val latestRange = rememberUpdatedState(range)
     val latestOnValueChange = rememberUpdatedState(onValueChange)
+    val latestOnReset = rememberUpdatedState(onReset)
     val latestOnDragStart = rememberUpdatedState(onDragStart)
     val latestOnDragEnd = rememberUpdatedState(onDragEnd)
     val latestFormatter = rememberUpdatedState(valueFormatter)
@@ -48,7 +50,17 @@ fun ColorControlSlider(
             } else {
                 ((value - range.start) / (range.endInclusive - range.start) * 100).roundToInt().toString()
             }
-            Text(displayVal, color = Color.White, fontSize = 11.sp)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "Reset",
+                    color = Color.LightGray,
+                    fontSize = 10.sp,
+                    modifier = Modifier
+                        .clickable(onClick = { latestOnReset.value() })
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                )
+                Text(displayVal, color = Color.White, fontSize = 11.sp)
+            }
         }
         Spacer(modifier = Modifier.height(4.dp))
         Box(
