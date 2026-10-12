@@ -40,6 +40,11 @@ fun VideoViewportSection(
     val playerState by timelinePreviewController.previewEngine.currentState.collectAsState()
     val playerError by timelinePreviewController.previewEngine.currentError.collectAsState()
     val firstFrameRendered by timelinePreviewController.previewEngine.firstFrameRendered.collectAsState()
+    val media3MetricsFlow = remember(engineType, timelinePreviewController) {
+        (timelinePreviewController.previewEngine as? com.example.timeline.engine.preview.Media3FallbackPreviewEngine)
+            ?.playbackMetrics
+            ?: kotlinx.coroutines.flow.MutableStateFlow(com.example.timeline.engine.preview.PreviewPlaybackMetrics())
+    }
     val latestIsPlaying by rememberUpdatedState(isPlaying)
     
     var showSafeArea by remember { mutableStateOf(false) }
@@ -54,8 +59,14 @@ fun VideoViewportSection(
         if (previewSettings.autoGenerateProxy) {
             project.mediaAssets
                 .filter { it.proxyStatus == com.example.timeline.media.ProxyStatus.RECOMMENDED }
-                .forEach { asset -> timelineViewModel.generateProxy(asset.assetId) }
+                .forEach { asset -> timelineViewModel.generateRecommendedProxy(asset.assetId) }
         }
+    }
+
+    LaunchedEffect(previewSettings.previewMode) {
+        timelinePreviewController.setPreferProxyPlayback(
+            preferProxy = previewSettings.previewMode != com.example.timeline.engine.preview.PreviewMode.COLOR_ACCURATE
+        )
     }
 
     LaunchedEffect(playheadFrame) {
@@ -91,9 +102,9 @@ fun VideoViewportSection(
         if (handledPlaybackError == errorKey) return@LaunchedEffect
         handledPlaybackError = errorKey
 
-        val isNativeFfmpegEngine = engineType == com.example.timeline.engine.preview.PreviewEngineType.FFMPEG_NATIVE ||
+        val isLibVlcEngine = engineType == com.example.timeline.engine.preview.PreviewEngineType.FFMPEG_NATIVE ||
             engineType == com.example.timeline.engine.preview.PreviewEngineType.VLC_NATIVE
-        if (isNativeFfmpegEngine && previewSettings.autoFallbackOnFailure) {
+        if (isLibVlcEngine && previewSettings.autoFallbackOnFailure) {
             timelinePreviewController.setEngineType(com.example.timeline.engine.preview.PreviewEngineType.MEDIA3_FALLBACK)
             editorViewModel.updateSelectedEngine(com.example.timeline.engine.preview.PreviewEngineType.MEDIA3_FALLBACK)
             if (isPlaying) timelinePreviewController.play()
@@ -110,13 +121,13 @@ fun VideoViewportSection(
         firstFrameRendered,
         previewSettings.autoFallbackOnFailure
     ) {
-        val nativeEngine = engineType == com.example.timeline.engine.preview.PreviewEngineType.FFMPEG_NATIVE ||
+        val libVlcEngine = engineType == com.example.timeline.engine.preview.PreviewEngineType.FFMPEG_NATIVE ||
             engineType == com.example.timeline.engine.preview.PreviewEngineType.VLC_NATIVE
         val engineAtStart = timelinePreviewController.previewEngine
         val assetIdAtStart = currentAsset?.assetId
         if (
             previewSettings.autoFallbackOnFailure &&
-            nativeEngine &&
+            libVlcEngine &&
             currentAsset?.mimeType?.startsWith("video/") == true &&
             !firstFrameRendered &&
             playerState != com.example.timeline.engine.preview.PreviewState.ERROR
@@ -130,7 +141,9 @@ fun VideoViewportSection(
                 !timelinePreviewController.previewEngine.firstFrameRendered.value &&
                 timelinePreviewController.activeAsset.value?.assetId == assetIdAtStart
             ) {
-                android.util.Log.w("VideoViewportSection", "Native player produced no first frame; switching to Media3")
+                if (com.example.BuildConfig.DEBUG) {
+                    android.util.Log.d("VideoViewportSection", "LibVLC produced no first frame; switching to Media3")
+                }
                 timelinePreviewController.setEngineType(com.example.timeline.engine.preview.PreviewEngineType.MEDIA3_FALLBACK)
                 editorViewModel.updateSelectedEngine(com.example.timeline.engine.preview.PreviewEngineType.MEDIA3_FALLBACK)
                 if (latestIsPlaying) timelinePreviewController.play()
@@ -215,7 +228,7 @@ fun VideoViewportSection(
             ViewportStatusCard(
                 currentAsset = currentAsset,
                 playerError = playerError,
-                engineType = engineType.displayName,
+                engineType = engineType,
                 onRequestProxy = { timelineViewModel.generateProxy(it) },
                 onRequestRelink = onRelinkRequest,
                 onRetryPlayback = { 
@@ -235,17 +248,12 @@ fun VideoViewportSection(
             androidx.compose.ui.window.Dialog(onDismissRequest = { showSettingsMenu = false }) {
                 ViewportSettingsMenu(
                     activeEngine = engineType,
-                    capabilities = timelinePreviewController.previewEngine.capabilities,
                     settings = previewSettings,
                     onSettingsChanged = { newSettings ->
                         editorViewModel.updateSelectedEngine(newSettings.selectedEngine)
-                        editorViewModel.updateQualityMode(newSettings.qualityMode)
                         editorViewModel.updatePreviewMode(newSettings.previewMode)
                         if (newSettings.showDebugOverlay != previewSettings.showDebugOverlay) {
                             editorViewModel.toggleDebugOverlay()
-                        }
-                        if (newSettings.showEngineBadge != previewSettings.showEngineBadge) {
-                            editorViewModel.toggleEngineBadge()
                         }
                         if (newSettings.autoFallbackOnFailure != previewSettings.autoFallbackOnFailure) {
                             editorViewModel.toggleAutoFallback()
@@ -264,11 +272,15 @@ fun VideoViewportSection(
             }
         }
         
-        if (previewSettings.showDebugOverlay) {
+        if (com.example.BuildConfig.DEBUG && previewSettings.showDebugOverlay) {
+            val media3Metrics by media3MetricsFlow.collectAsState()
             DeveloperDebugPanel(
                 currentAsset = currentAsset,
                 playheadFrame = playheadFrame,
-                engineType = engineType.displayName
+                engineType = engineType.displayName,
+                media3Metrics = media3Metrics.takeIf {
+                    engineType == com.example.timeline.engine.preview.PreviewEngineType.MEDIA3_FALLBACK
+                }
             )
         }
     }

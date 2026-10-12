@@ -4,7 +4,7 @@ import android.content.Context
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import androidx.work.Data
-import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.CancellationException
 
 class ProxyGenerationWorker(
     appContext: Context,
@@ -12,9 +12,13 @@ class ProxyGenerationWorker(
 ) : CoroutineWorker(appContext, workerParams) {
 
     override suspend fun doWork(): Result {
-        val assetIdString = inputData.getString(KEY_ASSET_ID) ?: return Result.failure()
-        val sourceUriString = inputData.getString(KEY_SOURCE_URI) ?: return Result.failure()
-        val outputUriString = inputData.getString(KEY_OUTPUT_URI) ?: return Result.failure()
+        fun invalidInput(message: String) = Result.failure(
+            Data.Builder().putString(KEY_ERROR_MSG, message).build()
+        )
+        val sourceUriString = inputData.getString(KEY_SOURCE_URI)
+            ?: return invalidInput("Proxy source URI is missing.")
+        val outputUriString = inputData.getString(KEY_OUTPUT_URI)
+            ?: return invalidInput("Proxy output URI is missing.")
         
         val sourceWidth = inputData.getInt(KEY_SOURCE_WIDTH, 1920)
         val sourceHeight = inputData.getInt(KEY_SOURCE_HEIGHT, 1080)
@@ -25,12 +29,13 @@ class ProxyGenerationWorker(
             sourceWidth = sourceWidth,
             sourceHeight = sourceHeight,
             videoMimeType = "video/avc",
-            audioMimeType = null
+            audioMimeType = if (hasAudio) androidx.media3.common.MimeTypes.AUDIO_AAC else null
         )
         
         val backend = Media3TranscoderBackend(applicationContext)
         var success = false
         var isCancelledLocally = false
+        var failureMessage: String? = null
         
         try {
             backend.transcode(
@@ -58,22 +63,31 @@ class ProxyGenerationWorker(
                     }
                     is TranscodeProgress.Error -> {
                         success = false
-                        setProgress(Data.Builder().putString(KEY_ERROR_MSG, progress.exception.message).build())
+                        failureMessage = progress.exception.message ?: "Media3 Transformer could not create the proxy."
+                        setProgress(Data.Builder().putString(KEY_ERROR_MSG, failureMessage).build())
                     }
                 }
             }
+        } catch (cancelled: CancellationException) {
+            backend.cancel()
+            throw cancelled
         } catch (e: Exception) {
-            return Result.failure(Data.Builder().putString(KEY_ERROR_MSG, "Setup Exception: ${e.message}").build())
+            backend.cancel()
+            return Result.failure(
+                Data.Builder().putString(KEY_ERROR_MSG, "Proxy generation failed: ${e.message ?: e.javaClass.simpleName}").build()
+            )
         }
-        
-        if (isCancelledLocally || isStopped) {
-            return Result.failure()
-        }
-        
+
+        if (isCancelledLocally || isStopped) return Result.failure()
+
         return if (success) {
             Result.success(Data.Builder().putString(KEY_OUTPUT_URI, outputUriString).build())
         } else {
-            Result.failure() // Could also pass KEY_ERROR_MSG here if we tracked it
+            Result.failure(
+                Data.Builder()
+                    .putString(KEY_ERROR_MSG, failureMessage ?: "Media3 Transformer did not complete proxy generation.")
+                    .build()
+            )
         }
     }
 

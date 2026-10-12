@@ -25,6 +25,7 @@ fun ProjectMediaStrip(
         onAssetClick = { asset -> timelineViewModel.addClipFromMedia(asset) },
         onAssetOptionClick = { asset, mode -> timelineViewModel.addClipFromMediaWithMode(asset, mode) },
         onRetryImport = { timelineViewModel.retryMediaAsset(it) },
+        onGenerateProxy = { timelineViewModel.generateProxy(it) },
         onCancelProxy = { timelineViewModel.cancelProxy(it) },
         onRelinkRequest = onRelinkRequest,
         modifier = modifier

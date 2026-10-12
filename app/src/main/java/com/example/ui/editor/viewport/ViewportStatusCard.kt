@@ -16,7 +16,7 @@ import com.example.timeline.media.ProxyStatus
 fun ViewportStatusCard(
     currentAsset: MediaAsset?,
     playerError: String?,
-    engineType: String,
+    engineType: com.example.timeline.engine.preview.PreviewEngineType,
     onRequestProxy: (String) -> Unit,
     onRequestRelink: (String) -> Unit,
     onRetryPlayback: () -> Unit,
@@ -46,26 +46,39 @@ fun ViewportStatusCard(
             }
 
             val hasProxy = currentAsset.proxyStatus == ProxyStatus.READY
-            if (currentAsset.previewStatus == PreviewStatus.DIRECT_FAILED_RUNTIME && !hasProxy) {
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(2.dp)) {
-                    Text("Direct Playback Failed", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Button(onClick = { onRequestProxy(currentAsset.assetId) }, modifier = Modifier.height(32.dp), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) { Text("Generate Proxy") }
+            val canRetryProxy = currentAsset.proxyStatus == ProxyStatus.FAILED ||
+                currentAsset.proxyStatus == ProxyStatus.REQUIRED ||
+                currentAsset.previewStatus == PreviewStatus.DIRECT_FAILED_RUNTIME ||
+                currentAsset.previewStatus == PreviewStatus.PROXY_REQUIRED
+            if (!hasProxy && currentAsset.proxyStatus != ProxyStatus.GENERATING && canRetryProxy) {
+                Button(
+                    onClick = { onRequestProxy(currentAsset.assetId) },
+                    modifier = Modifier.height(32.dp).padding(top = 2.dp),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                ) {
+                    Text(if (currentAsset.proxyStatus == ProxyStatus.FAILED) "Retry Proxy" else "Generate Proxy")
                 }
+            }
+            if (currentAsset.previewStatus == PreviewStatus.DIRECT_FAILED_RUNTIME && !hasProxy) {
+                Text("Direct Playback Failed", color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(2.dp), style = MaterialTheme.typography.bodySmall)
             }
         }
         
         if (playerError != null) {
-            val msg = if (currentAsset?.proxyStatus == ProxyStatus.READY) "Proxy Playback Error: $playerError" else "$engineType Playback Error: $playerError"
+            val msg = if (currentAsset?.proxyStatus == ProxyStatus.READY) "Proxy Playback Error: $playerError" else "${engineType.displayName} Playback Error: $playerError"
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(2.dp)) {
                 Text(msg, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                 Spacer(modifier = Modifier.width(8.dp))
                 Button(onClick = onRetryPlayback, modifier = Modifier.height(32.dp), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) { Text("Retry") }
                 
-                if (engineType == "Native VLC" || engineType == "FFmpeg / LibVLC") {
+                if (engineType == com.example.timeline.engine.preview.PreviewEngineType.FFMPEG_NATIVE ||
+                    engineType == com.example.timeline.engine.preview.PreviewEngineType.VLC_NATIVE
+                ) {
                     Spacer(modifier = Modifier.width(4.dp))
                     Button(onClick = { onSwitchEngine(com.example.timeline.engine.preview.PreviewEngineType.MEDIA3_FALLBACK) }, modifier = Modifier.height(32.dp), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) { Text("Use Media3") }
-                } else if (engineType == "Media3" || engineType == "Auto") {
+                } else if (engineType == com.example.timeline.engine.preview.PreviewEngineType.MEDIA3_FALLBACK ||
+                    engineType == com.example.timeline.engine.preview.PreviewEngineType.AUTO
+                ) {
                     Spacer(modifier = Modifier.width(4.dp))
                     Button(onClick = { onSwitchEngine(com.example.timeline.engine.preview.PreviewEngineType.STILL_FRAME) }, modifier = Modifier.height(32.dp), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) { Text("Fallback to Still") }
                 }

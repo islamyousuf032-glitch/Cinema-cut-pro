@@ -39,6 +39,7 @@ fun MediaBinPanel(
     onAssetClick: (MediaAsset) -> Unit,
     onAssetOptionClick: ((MediaAsset, String) -> Unit)? = null,
     onRetryImport: (String) -> Unit,
+    onGenerateProxy: (String) -> Unit = {},
     onCancelProxy: (String) -> Unit,
     onRelinkRequest: (String) -> Unit,
     modifier: Modifier = Modifier
@@ -94,6 +95,7 @@ fun MediaBinPanel(
                             asset = asset,
                             proxyProgress = proxyProgressMap[asset.assetId],
                             onRetryImport = { onRetryImport(asset.assetId) },
+                            onGenerateProxy = { onGenerateProxy(asset.assetId) },
                             onCancelProxy = { onCancelProxy(asset.assetId) },
                             onRelinkRequest = { onRelinkRequest(asset.assetId) },
                             onClick = { onAssetClick(asset) },
@@ -111,6 +113,7 @@ fun MediaAssetItem(
     asset: MediaAsset,
     proxyProgress: Float?,
     onRetryImport: () -> Unit,
+    onGenerateProxy: () -> Unit,
     onCancelProxy: () -> Unit,
     onRelinkRequest: () -> Unit,
     onClick: () -> Unit,
@@ -164,15 +167,6 @@ fun MediaAssetItem(
                          }
                          Text(text = "Relink", style = MaterialTheme.typography.labelSmall, modifier = Modifier.clickable { onRelinkRequest() }, color = MaterialTheme.colorScheme.primary)
                      }
-                } else if (asset.previewStatus == PreviewStatus.UNSUPPORTED) {
-                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                         Icon(Icons.Default.Warning, contentDescription = "Unsupported", tint = Color.Red, modifier = Modifier.size(16.dp))
-                         Text(
-                             text = "Unsupported",
-                             color = Color.Red,
-                             style = MaterialTheme.typography.labelSmall
-                         )
-                     }
                 } else if (asset.proxyStatus == ProxyStatus.GENERATING) {
                      Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                          Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -185,7 +179,31 @@ fun MediaAssetItem(
                          }
                          Text(text = "Cancel", style = MaterialTheme.typography.labelSmall, modifier = Modifier.clickable { onCancelProxy() }, color = MaterialTheme.colorScheme.error)
                      }
-                } else if (asset.proxyStatus == ProxyStatus.REQUIRED || asset.previewStatus == PreviewStatus.DIRECT_FAILED_RUNTIME) {
+                } else if (asset.proxyStatus == ProxyStatus.FAILED) {
+                     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                         Text("Proxy Failed", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall)
+                         Text(
+                             text = "Retry Proxy",
+                             style = MaterialTheme.typography.labelSmall,
+                             modifier = Modifier.clickable { onGenerateProxy() },
+                             color = MaterialTheme.colorScheme.primary
+                         )
+                         asset.errorMessage?.takeIf { it.isNotBlank() }?.let { message ->
+                             Text(
+                                 text = message,
+                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                 style = MaterialTheme.typography.labelSmall,
+                                 maxLines = 2,
+                                 overflow = TextOverflow.Ellipsis
+                             )
+                         }
+                     }
+                } else if (asset.proxyStatus == ProxyStatus.READY) {
+                     Text("Proxy Ready", color = Color.Green, style = MaterialTheme.typography.labelSmall)
+                } else if (asset.proxyStatus == ProxyStatus.REQUIRED ||
+                    asset.previewStatus == PreviewStatus.DIRECT_FAILED_RUNTIME ||
+                    asset.previewStatus == PreviewStatus.PROXY_REQUIRED
+                ) {
                      Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                          Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                              Icon(Icons.Default.Warning, contentDescription = "Proxy Required", tint = Color.Yellow, modifier = Modifier.size(16.dp))
@@ -195,20 +213,29 @@ fun MediaAssetItem(
                                  style = MaterialTheme.typography.labelSmall
                              )
                          }
-                     }
-                } else if (asset.proxyStatus == ProxyStatus.READY) {
-                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                          Text(
-                             text = "Proxy Ready",
-                             color = Color.Green,
-                             style = MaterialTheme.typography.labelSmall
+                             text = "Generate Proxy",
+                             style = MaterialTheme.typography.labelSmall,
+                             modifier = Modifier.clickable { onGenerateProxy() },
+                             color = MaterialTheme.colorScheme.primary
                          )
                      }
                 } else if (asset.proxyStatus == ProxyStatus.RECOMMENDED) {
-                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                         Text("Proxy Rec.", color = Color.Yellow, style = MaterialTheme.typography.labelSmall)
                          Text(
-                             text = "Proxy Rec.",
-                             color = Color.Yellow,
+                             text = "Generate Proxy",
+                             style = MaterialTheme.typography.labelSmall,
+                             modifier = Modifier.clickable { onGenerateProxy() },
+                             color = MaterialTheme.colorScheme.primary
+                         )
+                     }
+                } else if (asset.previewStatus == PreviewStatus.UNSUPPORTED) {
+                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                         Icon(Icons.Default.Warning, contentDescription = "Unsupported", tint = Color.Red, modifier = Modifier.size(16.dp))
+                         Text(
+                             text = "Unsupported",
+                             color = Color.Red,
                              style = MaterialTheme.typography.labelSmall
                          )
                      }

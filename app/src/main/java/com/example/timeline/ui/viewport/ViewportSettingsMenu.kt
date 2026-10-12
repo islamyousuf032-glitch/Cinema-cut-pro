@@ -6,24 +6,21 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.draw.scale
-import com.example.timeline.engine.preview.PreviewEngineCapabilities
-import com.example.timeline.engine.preview.PreviewEngineType
 import com.example.timeline.engine.preview.PreviewEngineSettings
-import com.example.timeline.engine.preview.PreviewQualityMode
+import com.example.timeline.engine.preview.PreviewEngineType
 import com.example.timeline.engine.preview.PreviewMode
 
 @Composable
 fun ViewportSettingsMenu(
     activeEngine: PreviewEngineType,
-    capabilities: PreviewEngineCapabilities,
     settings: PreviewEngineSettings,
     onSettingsChanged: (PreviewEngineSettings) -> Unit,
     onEngineSelected: (PreviewEngineType) -> Unit,
@@ -46,84 +43,59 @@ fun ViewportSettingsMenu(
             Text("Viewport Settings", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Color.White)
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Playback Engine
             SectionHeader("Playback Engine")
-            EngineOption(PreviewEngineType.AUTO, activeEngine, onEngineSelected, enabled = true, subtext = "FFmpeg native first; Media3 fallback")
-            EngineOption(PreviewEngineType.FFMPEG_NATIVE, activeEngine, onEngineSelected, enabled = true, subtext = "Native LibVLC/FFmpeg playback")
-            EngineOption(PreviewEngineType.MEDIA3_FALLBACK, activeEngine, onEngineSelected, enabled = true, subtext = "Hardware decode + live grade preview")
-            EngineOption(PreviewEngineType.BROWSER, activeEngine, onEngineSelected, enabled = true, subtext = "WebView based player")
-            EngineOption(PreviewEngineType.STILL_FRAME, activeEngine, onEngineSelected, enabled = true, subtext = "Available for still preview only")
-            EngineOption(PreviewEngineType.PROXY_PREVIEW, activeEngine, onEngineSelected, enabled = false, subtext = "Backend not installed")
-            EngineOption(PreviewEngineType.NATIVE_CPP, activeEngine, onEngineSelected, enabled = false, subtext = "Separate native decoder stub is not linked")
+            EngineOption(PreviewEngineType.AUTO, settings.selectedEngine, onEngineSelected, "LibVLC first; Media3 fallback on decode failure")
+            EngineOption(PreviewEngineType.FFMPEG_NATIVE, settings.selectedEngine, onEngineSelected, "LibVLC 3.5.1; FFmpeg decoding is inside LibVLC")
+            EngineOption(PreviewEngineType.MEDIA3_FALLBACK, settings.selectedEngine, onEngineSelected, "Media3 hardware decode and live GPU grading")
+            EngineOption(PreviewEngineType.BROWSER, settings.selectedEngine, onEngineSelected, "WebView-based playback")
+            EngineOption(PreviewEngineType.STILL_FRAME, settings.selectedEngine, onEngineSelected, "Still-frame preview only")
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Text(
+                text = "Active player: ${activeEngine.displayName}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 32.dp, top = 4.dp, bottom = 8.dp)
+            )
 
-            // Preview Quality
-            SectionHeader("Preview Quality")
-            QualityOption(PreviewQualityMode.AUTO, settings.qualityMode) { onSettingsChanged(settings.copy(qualityMode = it)) }
-            QualityOption(PreviewQualityMode.FULL, settings.qualityMode) { onSettingsChanged(settings.copy(qualityMode = it)) }
-            QualityOption(PreviewQualityMode.HALF, settings.qualityMode) { onSettingsChanged(settings.copy(qualityMode = it)) }
-            QualityOption(PreviewQualityMode.P1080, settings.qualityMode) { onSettingsChanged(settings.copy(qualityMode = it)) }
-            QualityOption(PreviewQualityMode.P720, settings.qualityMode) { onSettingsChanged(settings.copy(qualityMode = it)) }
-            QualityOption(PreviewQualityMode.P540, settings.qualityMode) { onSettingsChanged(settings.copy(qualityMode = it)) }
-            QualityOption(PreviewQualityMode.P360, settings.qualityMode) { onSettingsChanged(settings.copy(qualityMode = it)) }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // Preview Mode
-            SectionHeader("Preview Mode")
-            ModeOption(PreviewMode.SMOOTH_PLAYBACK, settings.previewMode) { onSettingsChanged(settings.copy(previewMode = it)) }
-            ModeOption(PreviewMode.COLOR_ACCURATE, settings.previewMode) { onSettingsChanged(settings.copy(previewMode = it)) }
-            ModeOption(PreviewMode.GRADED_STILL, settings.previewMode) { onSettingsChanged(settings.copy(previewMode = it)) }
-            ModeOption(PreviewMode.PROXY_PREVIEW, settings.previewMode) { onSettingsChanged(settings.copy(previewMode = it)) }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // Toggles
-            SectionHeader("Display Options")
-            ToggleOption("Show engine badge", settings.showEngineBadge) { onSettingsChanged(settings.copy(showEngineBadge = it)) }
-            ToggleOption("Show debug overlay", settings.showDebugOverlay) { onSettingsChanged(settings.copy(showDebugOverlay = it)) }
-            
-            SectionHeader("System Options")
-            ToggleOption("Auto fallback on failure", settings.autoFallbackOnFailure) { onSettingsChanged(settings.copy(autoFallbackOnFailure = it)) }
-            ToggleOption("Auto proxy for heavy media", settings.autoGenerateProxy) { onSettingsChanged(settings.copy(autoGenerateProxy = it)) }
-
-            Spacer(modifier = Modifier.height(16.dp))
-            SectionHeader("Active Engine Status: ${activeEngine.displayName}")
             Spacer(modifier = Modifier.height(8.dp))
-            
-            StatusRow("Moving Playback", capabilities.canPlayMovingVideo)
-            StatusRow("Realtime Grade", capabilities.canApplyRealtimeColorGrade)
-            StatusRow("Proxy Support", capabilities.canUseProxy)
-            StatusRow("4K Support", capabilities.supports4K)
-            StatusRow("10-Bit Support", capabilities.supports10Bit)
-            StatusRow("HDR Support", capabilities.supportsHDR)
-            
-            if (capabilities.currentFailureReason != null) {
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = "Engine Error: ${capabilities.currentFailureReason}",
-                    color = Color(0xFFFF5252),
-                    style = MaterialTheme.typography.bodySmall,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium
-                )
-            } else if ((activeEngine == PreviewEngineType.FFMPEG_NATIVE || activeEngine == PreviewEngineType.VLC_NATIVE) &&
-                !capabilities.canApplyRealtimeColorGrade
-            ) {
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = "Live grading switches to the Media3 GPU preview while the Color panel is open.",
-                    color = Color(0xFFFFA000),
-                    style = MaterialTheme.typography.bodySmall,
-                    fontSize = 11.sp,
-                    lineHeight = 14.sp
-                )
+            SectionHeader("Preview Source")
+            ModeOption(PreviewMode.SMOOTH_PLAYBACK, settings.previewMode) {
+                onSettingsChanged(settings.copy(previewMode = it))
             }
-            
-            Spacer(modifier = Modifier.height(24.dp))
+            ModeOption(PreviewMode.COLOR_ACCURATE, settings.previewMode) {
+                onSettingsChanged(settings.copy(previewMode = it))
+            }
+            Text(
+                text = if (settings.previewMode == PreviewMode.COLOR_ACCURATE) {
+                    "Uses original media when available."
+                } else {
+                    "Uses a generated proxy when available; otherwise uses the original."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = Color.Gray,
+                modifier = Modifier.padding(start = 32.dp, bottom = 8.dp)
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+            SectionHeader("Automatic Actions")
+            ToggleOption("Fallback after playback failure", settings.autoFallbackOnFailure) {
+                onSettingsChanged(settings.copy(autoFallbackOnFailure = it))
+            }
+            ToggleOption("Auto-generate recommended proxies", settings.autoGenerateProxy) {
+                onSettingsChanged(settings.copy(autoGenerateProxy = it))
+            }
+
+            if (com.example.BuildConfig.DEBUG) {
+                Spacer(modifier = Modifier.height(12.dp))
+                SectionHeader("Developer")
+                ToggleOption("Show playback diagnostics", settings.showDebugOverlay) {
+                    onSettingsChanged(settings.copy(showDebugOverlay = it))
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
             Button(
-                onClick = onDismiss, 
+                onClick = onDismiss,
                 modifier = Modifier.fillMaxWidth(),
                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
             ) {
@@ -140,95 +112,42 @@ private fun SectionHeader(text: String) {
 }
 
 @Composable
-private fun StatusRow(label: String, supported: Boolean) {
-    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text(label, style = MaterialTheme.typography.bodySmall, color = Color.White)
-        Text(if (supported) "Supported" else "Not Supported", 
-             color = if (supported) Color(0xFF4CAF50) else Color(0xFFE57373),
-             style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium)
-    }
-}
-
-@Composable
 private fun ToggleOption(label: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), 
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
         Text(label, style = MaterialTheme.typography.bodyMedium, color = Color.White)
-        Switch(
-            checked = checked,
-            onCheckedChange = onCheckedChange,
-            modifier = Modifier.scale(0.8f)
-        )
+        Switch(checked = checked, onCheckedChange = onCheckedChange, modifier = Modifier.scale(0.8f))
     }
 }
 
 @Composable
 private fun EngineOption(
     engine: PreviewEngineType,
-    activeEngine: PreviewEngineType,
+    selectedEngine: PreviewEngineType,
     onSelect: (PreviewEngineType) -> Unit,
-    enabled: Boolean = true,
-    subtext: String? = null
+    subtext: String
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(enabled = enabled) { onSelect(engine) }
+            .clickable { onSelect(engine) }
             .padding(vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         RadioButton(
-            selected = engine == activeEngine,
-            onClick = null,
-            modifier = Modifier.size(20.dp),
-            colors = RadioButtonDefaults.colors(
-                selectedColor = MaterialTheme.colorScheme.primary,
-                unselectedColor = if (enabled) MaterialTheme.colorScheme.onSurfaceVariant else Color.Gray.copy(alpha = 0.5f)
-            )
-        )
-        Spacer(modifier = Modifier.width(12.dp))
-        Column {
-            Text(
-                text = engine.displayName, 
-                style = MaterialTheme.typography.bodyMedium, 
-                color = if (enabled) Color.White else Color.Gray.copy(alpha = 0.5f)
-            )
-            if (subtext != null) {
-                Text(
-                    text = subtext,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (enabled) Color.Gray else Color.Gray.copy(alpha = 0.5f),
-                    fontSize = 11.sp
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun QualityOption(
-    quality: PreviewQualityMode,
-    activeQuality: PreviewQualityMode,
-    onSelect: (PreviewQualityMode) -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { onSelect(quality) }
-            .padding(vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        RadioButton(
-            selected = quality == activeQuality,
+            selected = engine == selectedEngine,
             onClick = null,
             modifier = Modifier.size(20.dp),
             colors = RadioButtonDefaults.colors(selectedColor = MaterialTheme.colorScheme.primary)
         )
         Spacer(modifier = Modifier.width(12.dp))
-        Text(quality.displayName, style = MaterialTheme.typography.bodyMedium, color = Color.White)
+        Column {
+            Text(engine.displayName, style = MaterialTheme.typography.bodyMedium, color = Color.White)
+            Text(subtext, style = MaterialTheme.typography.bodySmall, color = Color.Gray, fontSize = 11.sp)
+        }
     }
 }
 
