@@ -11,5 +11,6 @@ data class MediaAnalysisResult(
     val audioStreams: List<AudioStreamInfo>,
     val hasVideo: Boolean,
     val hasAudio: Boolean,
-    val isVariableFrameRate: Boolean
+    val isVariableFrameRate: Boolean,
+    val variableFrameRateDetectionComplete: Boolean = false
 )

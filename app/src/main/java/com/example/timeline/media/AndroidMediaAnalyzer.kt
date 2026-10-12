@@ -129,10 +129,11 @@ class AndroidMediaAnalyzer(
             
             // Probe presentation timestamps from the selected video track. This does not decode
             // frames, and the bounded sample avoids making media import wait on a full scan.
-            val isVariableFrameRate = firstVideoTrackIndex?.let { trackIndex ->
-                val timestampSamples = sampleVideoPresentationTimeSegments(extractor, trackIndex, durationUs)
-                VariableFrameRateDetector.isVariableFrameRateSegments(timestampSamples)
-            } ?: false
+            val cadence = firstVideoTrackIndex?.let { trackIndex ->
+                scanVideoPresentationTimes(extractor, trackIndex)
+            } ?: FrameRateCadence.UNKNOWN
+            val isVariableFrameRate = cadence == FrameRateCadence.VARIABLE
+            val variableFrameRateDetectionComplete = cadence != FrameRateCadence.UNKNOWN
 
             val analysisResult = MediaAnalysisResult(
                 durationUs = durationUs,
@@ -145,7 +146,8 @@ class AndroidMediaAnalyzer(
                 audioStreams = audioStreams,
                 hasVideo = hasVideo,
                 hasAudio = hasAudio,
-                isVariableFrameRate = isVariableFrameRate
+                isVariableFrameRate = isVariableFrameRate,
+                variableFrameRateDetectionComplete = variableFrameRateDetectionComplete
             )
 
             val mediaStatusResult = decisionEngine.decideImportStatus(analysisResult)
@@ -165,7 +167,8 @@ class AndroidMediaAnalyzer(
                 hasVideo = hasVideo,
                 hasAudio = hasAudio,
                 isVariableFrameRate = isVariableFrameRate,
-                estimatedFrameRate = finalFrameRate
+                estimatedFrameRate = finalFrameRate,
+                variableFrameRateDetectionComplete = variableFrameRateDetectionComplete
             )
 
             return@withContext asset.copy(
@@ -177,7 +180,7 @@ class AndroidMediaAnalyzer(
             )
 
         } catch (e: Exception) {
-            e.printStackTrace()
+            if (com.example.BuildConfig.DEBUG) e.printStackTrace()
             return@withContext asset.copy(
                 previewStatus = PreviewStatus.UNSUPPORTED,
                 mediaErrorStatus = MediaErrorStatus.UNKNOWN_ERROR,
@@ -197,42 +200,37 @@ class AndroidMediaAnalyzer(
         }
     }
 
-    private fun sampleVideoPresentationTimeSegments(
+    private fun scanVideoPresentationTimes(
         extractor: MediaExtractor,
-        videoTrackIndex: Int,
-        durationUs: Long
-    ): List<List<Long>> {
-        val seekPointsUs = if (durationUs > 0L) {
-            listOf(0L, durationUs / 2L, (durationUs - VFR_TAIL_WINDOW_US).coerceAtLeast(0L)).distinct()
-        } else {
-            listOf(0L)
-        }
-        val sampleLimit = if (seekPointsUs.size == 1) MAX_VFR_SAMPLE_COUNT else VFR_SAMPLES_PER_SEGMENT
-        val segments = mutableListOf<List<Long>>()
+        videoTrackIndex: Int
+    ): FrameRateCadence {
+        val presentationTimesUs = ArrayList<Long>()
         var selectedTrack = false
-
         try {
             extractor.selectTrack(videoTrackIndex)
             selectedTrack = true
-            seekPointsUs.forEach { seekPointUs ->
-                extractor.seekTo(seekPointUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
-                val segment = ArrayList<Long>(sampleLimit)
-                while (segment.size < sampleLimit) {
-                    val sampleTrackIndex = extractor.sampleTrackIndex
-                    val sampleTimeUs = extractor.sampleTime
-                    if (sampleTrackIndex < 0 || sampleTimeUs < 0L) break
-                    if (sampleTrackIndex == videoTrackIndex) segment += sampleTimeUs
-                    if (!extractor.advance()) break
+            while (true) {
+                val sampleTrackIndex = extractor.sampleTrackIndex
+                val sampleTimeUs = extractor.sampleTime
+                if (sampleTrackIndex < 0 || sampleTimeUs < 0L) break
+                if (sampleTrackIndex == videoTrackIndex) {
+                    if (presentationTimesUs.size >= MAX_VFR_SAMPLE_COUNT) {
+                        // A bounded scan that hits the limit is inconclusive, not proof of CFR.
+                        return FrameRateCadence.UNKNOWN
+                    }
+                    presentationTimesUs += sampleTimeUs
                 }
-                if (segment.isNotEmpty()) segments += segment
+                if (!extractor.advance()) break
             }
         } catch (error: Exception) {
-            android.util.Log.w("AndroidMediaAnalyzer", "Could not sample video timestamps for VFR detection", error)
-            return emptyList()
+            if (com.example.BuildConfig.DEBUG) {
+                android.util.Log.w("AndroidMediaAnalyzer", "Could not scan video timestamps for VFR detection", error)
+            }
+            return FrameRateCadence.UNKNOWN
         } finally {
             if (selectedTrack) runCatching { extractor.unselectTrack(videoTrackIndex) }
         }
-        return segments
+        return VariableFrameRateDetector.classify(presentationTimesUs)
     }
 
     private fun MediaFormat.getIntegerSafely(key: String, default: Int): Int {
@@ -243,8 +241,6 @@ class AndroidMediaAnalyzer(
     }
 
     private companion object {
-        const val MAX_VFR_SAMPLE_COUNT = 180
-        const val VFR_SAMPLES_PER_SEGMENT = 60
-        const val VFR_TAIL_WINDOW_US = 2_000_000L
+        const val MAX_VFR_SAMPLE_COUNT = 500_000
     }
 }

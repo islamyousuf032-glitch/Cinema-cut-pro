@@ -21,5 +21,7 @@ data class MediaMetadata(
     val exactFrameRate: FrameRate?,
     val timecodeStart: String?,
     val creationTime: Long?,
-    val originalFilename: String? = null
+    val originalFilename: String? = null,
+    /** True only when a usable timestamp cadence was classified from the video samples. */
+    val variableFrameRateDetectionComplete: Boolean = false
 )

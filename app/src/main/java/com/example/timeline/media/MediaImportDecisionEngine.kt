@@ -89,7 +89,9 @@ class MediaImportDecisionEngine(private val capabilityDetector: CodecCapabilityD
         }
 
         if (result.isVariableFrameRate) {
-            warnings.add("Variable Frame Rate (VFR) detected. Audio sync issues may occur.")
+            warnings.add("Variable frame rate was detected from sample timestamps. This Media3 export path cannot conform it yet; export will be blocked and the original will remain unchanged.")
+        } else if (result.hasVideo && !result.variableFrameRateDetectionComplete) {
+            warnings.add("Video timestamp cadence could not be verified; reanalyze before exporting this source.")
         }
 
         val report = ImportTechnicalReport(
