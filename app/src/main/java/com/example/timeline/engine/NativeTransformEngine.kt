@@ -11,12 +11,12 @@ object NativeTransformEngine {
         try {
             System.loadLibrary("transform_engine")
             isNativeAvailable = true
-            Log.i(TAG, "Native transform engine loaded successfully")
+            if (com.example.BuildConfig.DEBUG) Log.d(TAG, "Native transform engine loaded successfully")
         } catch (e: UnsatisfiedLinkError) {
-            Log.e(TAG, "Failed to load native transform engine", e)
+            if (com.example.BuildConfig.DEBUG) Log.d(TAG, "Native transform engine unavailable; using Kotlin fallback", e)
             isNativeAvailable = false
         } catch (e: Exception) {
-            Log.e(TAG, "Exception loading native transform engine", e)
+            if (com.example.BuildConfig.DEBUG) Log.d(TAG, "Native transform engine unavailable; using Kotlin fallback", e)
             isNativeAvailable = false
         }
     }

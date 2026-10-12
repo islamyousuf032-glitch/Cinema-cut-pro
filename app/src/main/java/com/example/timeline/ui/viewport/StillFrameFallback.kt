@@ -74,7 +74,7 @@ fun StillFrameFallback(
                     }
                     retriever.release()
                 } catch (e: Exception) {
-                    e.printStackTrace()
+                    if (com.example.BuildConfig.DEBUG) e.printStackTrace()
                 }
             }
         }
@@ -119,7 +119,7 @@ fun StillFrameFallback(
                     outBmp.copyPixelsFromBuffer(java.nio.ByteBuffer.wrap(outArray))
                     bitmapState.value = outBmp
                 } catch (e: Exception) {
-                    e.printStackTrace()
+                    if (com.example.BuildConfig.DEBUG) e.printStackTrace()
                     bitmapState.value = gradedBmp
                 }
             } else {

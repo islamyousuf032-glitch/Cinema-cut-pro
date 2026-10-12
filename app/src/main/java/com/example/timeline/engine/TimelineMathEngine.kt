@@ -5,7 +5,7 @@ object TimelineMathEngine {
         try {
             System.loadLibrary("timeline_engine")
         } catch (e: UnsatisfiedLinkError) {
-            e.printStackTrace()
+            if (com.example.BuildConfig.DEBUG) e.printStackTrace()
         }
     }
 

@@ -12,7 +12,7 @@ object ImportPermissionManager {
             context.contentResolver.takePersistableUriPermission(uri, takeFlags)
             true
         } catch (e: Exception) {
-            e.printStackTrace()
+            if (com.example.BuildConfig.DEBUG) e.printStackTrace()
             false
         }
     }

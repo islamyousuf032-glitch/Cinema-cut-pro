@@ -10,7 +10,9 @@ object NativeTimelineCore {
             System.loadLibrary("native_timeline_core")
             isNativeAvailable = true
         } catch (e: UnsatisfiedLinkError) {
-            Log.e("NativeTimelineCore", "Failed to load native_timeline_core: ${e.message}")
+            if (com.example.BuildConfig.DEBUG) {
+                Log.d("NativeTimelineCore", "Using Kotlin fallback; native_timeline_core could not be loaded: ${e.message}")
+            }
             isNativeAvailable = false
         }
     }

@@ -10,7 +10,9 @@ object NativeAdvancedTimelineCore {
             System.loadLibrary("native_advanced_timeline_core")
             isNativeLoaded = true
         } catch (e: UnsatisfiedLinkError) {
-            Log.e("NativeAdvancedTimeline", "Failed to load native_advanced_timeline_core library", e)
+            if (com.example.BuildConfig.DEBUG) {
+                Log.d("NativeAdvancedTimeline", "Using Kotlin fallback because the native library could not be loaded", e)
+            }
         }
     }
 
@@ -31,7 +33,7 @@ object NativeAdvancedTimelineCore {
         if (isAvailable()) {
             return nativeFrameToX(frame, pixelsPerFrame)
         }
-        Log.w("NativeAdvancedTimeline", "Using Kotlin fallback for frameToX")
+        if (com.example.BuildConfig.DEBUG) Log.d("NativeAdvancedTimeline", "Using Kotlin fallback for frameToX")
         return frame * pixelsPerFrame
     }
 
@@ -39,7 +41,7 @@ object NativeAdvancedTimelineCore {
         if (isAvailable()) {
             return nativeXToFrame(x, pixelsPerFrame)
         }
-        Log.w("NativeAdvancedTimeline", "Using Kotlin fallback for xToFrame")
+        if (com.example.BuildConfig.DEBUG) Log.d("NativeAdvancedTimeline", "Using Kotlin fallback for xToFrame")
         if (pixelsPerFrame <= 0f) return 0L
         return (x / pixelsPerFrame).toLong()
     }

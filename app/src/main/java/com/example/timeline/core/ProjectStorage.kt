@@ -50,7 +50,7 @@ class ProjectStorage(private val rootDir: File) {
             val project = json.decodeFromString<TimelineProject>(projectString)
             Pair(project, metadata)
         } catch (e: Exception) {
-            e.printStackTrace()
+            if (com.example.BuildConfig.DEBUG) e.printStackTrace()
             null
         }
     }
@@ -82,7 +82,7 @@ class ProjectStorage(private val rootDir: File) {
             val projectString = versionFile.readText()
             json.decodeFromString<TimelineProject>(projectString)
         } catch(e: Exception) {
-            e.printStackTrace()
+            if (com.example.BuildConfig.DEBUG) e.printStackTrace()
             null
         }
     }

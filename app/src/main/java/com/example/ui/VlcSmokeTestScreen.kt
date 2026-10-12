@@ -33,7 +33,7 @@ fun VlcSmokeTestScreen(
 
     fun addLog(msg: String) {
         logs = logs + msg
-        Log.d("VLC_SMOKE", msg)
+        if (com.example.BuildConfig.DEBUG) Log.d("VLC_SMOKE", msg)
     }
 
     var libVlc by remember { mutableStateOf<LibVLC?>(null) }
@@ -42,7 +42,7 @@ fun VlcSmokeTestScreen(
     DisposableEffect(videoPath) {
         addLog("libvlc init start")
         val vlc = try {
-            val options = arrayListOf("-vvv")
+            val options = arrayListOf<String>()
             LibVLC(context, options).also {
                 addLog("libvlc init success")
             }
