@@ -103,9 +103,12 @@ jobs:
               report += "\nJUnit test failures:\n\n```text\n" + "\n\n".join(test_failures[:20]) + "\n```\n"
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
               summary.write(report)
-          message = "\n".join(excerpt)
           if test_failures:
-              message += "\n\nJUnit test failures:\n" + "\n\n".join(test_failures[:20])
+              # Put test names first so GitHub's annotation-length limit cannot truncate them.
+              message = "JUnit test failures:\n" + "\n\n".join(failure[:1200] for failure in test_failures[:4])
+              message += "\n\nGradle summary:\n" + "\n".join(excerpt[:12])
+          else:
+              message = "\n".join(excerpt)
           message = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
           print(f"::error title=Gradle build failure::{message}")
           PY
