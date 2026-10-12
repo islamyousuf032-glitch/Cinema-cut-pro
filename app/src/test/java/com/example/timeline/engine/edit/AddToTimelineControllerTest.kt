@@ -13,10 +13,7 @@ import com.example.timeline.media.MediaMetadata
 import com.example.timeline.media.VideoStreamInfo
 import org.junit.Assert.assertEquals
 import org.junit.Test
-import org.junit.runner.RunWith
-import org.robolectric.RobolectricTestRunner
 
-@RunWith(RobolectricTestRunner::class)
 class AddToTimelineControllerTest {
     private fun project(tracks: List<TimelineTrack> = emptyList()) = TimelineProject(
         id = "project",
