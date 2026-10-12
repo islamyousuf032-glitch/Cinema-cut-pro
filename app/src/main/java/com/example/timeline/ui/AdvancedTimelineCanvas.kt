@@ -90,7 +90,8 @@ fun AdvancedTimelineCanvas(
     ) {
         val viewportWidth = constraints.maxWidth
         val centerX = viewportWidth / 2f
-        val contentHeightPx = 40.dp.toPx() + uiState.project.tracks.size * (trackHeight + trackPadding)
+        val contentHeightPx = with(androidx.compose.ui.platform.LocalDensity.current) { 40.dp.toPx() } +
+            uiState.project.tracks.size * (trackHeight + trackPadding)
         val maxScrollY = max(0f, contentHeightPx - constraints.maxHeight.toFloat())
         SideEffect {
             if (maxVerticalScroll != maxScrollY) maxVerticalScroll = maxScrollY
