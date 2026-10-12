@@ -11,7 +11,11 @@ object NativeTimelineCore {
             isNativeAvailable = true
         } catch (e: UnsatisfiedLinkError) {
             if (com.example.BuildConfig.DEBUG) {
-                Log.d("NativeTimelineCore", "Using Kotlin fallback; native_timeline_core could not be loaded: ${e.message}")
+                // Android's mockable android.jar throws in local JVM tests; diagnostics must never
+                // prevent the Kotlin fallback from initializing.
+                runCatching {
+                    Log.d("NativeTimelineCore", "Using Kotlin fallback; native_timeline_core could not be loaded: ${e.message}")
+                }
             }
             isNativeAvailable = false
         }
