@@ -103,8 +103,10 @@ fun EditorTopBar(
             IconButton(onClick = onToggleScopes) {
                 Icon(Icons.Filled.Equalizer, contentDescription = "Scopes")
             }
-            IconButton(onClick = onDebugClick) {
-                Icon(androidx.compose.material.icons.Icons.Filled.Info, contentDescription = "Debug")
+            if (com.example.BuildConfig.DEBUG) {
+                IconButton(onClick = onDebugClick) {
+                    Icon(Icons.Filled.Info, contentDescription = "Developer diagnostics")
+                }
             }
             Button(
                 onClick = onExportClick,

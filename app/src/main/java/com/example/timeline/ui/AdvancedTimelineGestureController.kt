@@ -99,9 +99,13 @@ object AdvancedTimelineGestureController {
         pixelsPerFrame: Float,
         excludeClipId: String? = null
     ): Long {
-        if (!NativeAdvancedTimelineCore.isAvailable()) return inputFrame
+        if (!NativeAdvancedTimelineCore.isAvailable()) {
+            val fps = Math.round(project.settings.getFpsRational().toFloat()).coerceAtLeast(1)
+            return SnapController().snapFrame(inputFrame, project, playheadFrame, pixelsPerFrame, excludeClipId, fps)
+        }
         
         val snapTargets = mutableListOf<Long>()
+        snapTargets.add(0L)
         snapTargets.add(playheadFrame)
         
         project.tracks.forEach { track ->

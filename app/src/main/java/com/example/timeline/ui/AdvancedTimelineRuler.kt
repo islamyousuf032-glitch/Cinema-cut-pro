@@ -73,7 +73,9 @@ fun AdvancedTimelineRuler(
                 i += 2
             }
         } else {
-            android.util.Log.w("AdvancedTimelineRuler", "Using Kotlin fallback for ruler ticks")
+            if (com.example.BuildConfig.DEBUG) {
+                android.util.Log.d("AdvancedTimelineRuler", "Using Kotlin fallback for ruler ticks")
+            }
             val fps = frameRate.toFloat().toInt().coerceAtLeast(1)
             val stepFrames = if (pixelsPerFrame * fps < 5f) fps * 10 else if (pixelsPerFrame * fps < 20f) fps * 5 else fps
             val startFrame = ((scrollX / pixelsPerFrame).toLong() / stepFrames) * stepFrames

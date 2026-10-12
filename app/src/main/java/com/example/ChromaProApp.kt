@@ -162,7 +162,7 @@ fun ChromaProApp(viewModel: MainViewModel = viewModel()) {
                         )
                     }
                 } catch (e: Exception) {
-                    e.printStackTrace()
+                    if (com.example.BuildConfig.DEBUG) e.printStackTrace()
                 }
             }
         }
@@ -172,6 +172,7 @@ fun ChromaProApp(viewModel: MainViewModel = viewModel()) {
         com.example.ui.export.ExportScreen(
             project = timelineUiState.project,
             onDismiss = { showExportDialog = false },
+            onFixTimeline = { timelineViewModel.fixTimelineForExport() },
             onExportLut = { size ->
                 lutSizeToBake = size
                 showExportDialog = false
@@ -235,7 +236,7 @@ fun ChromaProApp(viewModel: MainViewModel = viewModel()) {
                 return@Scaffold
             }
 
-            if (timelineUiState.showDebugPanel) {
+            if (com.example.BuildConfig.DEBUG && timelineUiState.showDebugPanel) {
                 val engine = timelinePreviewController.previewEngine
                 val diagnostics = mapOf(
                     "activeEngine" to if (engine.currentError.collectAsState().value != null) "STILL_FRAME_FALLBACK" else engine.engineType.name,
