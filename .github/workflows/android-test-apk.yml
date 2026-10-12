@@ -81,7 +81,8 @@ jobs:
           excerpt = list(dict.fromkeys((matches[-45:] if matches else lines[-60:]) + context))
 
           test_failures = []
-          for report_path in Path("app/build/test-results/testDebugUnitTest").rglob("TEST-*.xml"):
+          junit_reports = sorted(Path("app/build/test-results").rglob("*.xml"))
+          for report_path in junit_reports:
               try:
                   root = ET.parse(report_path).getroot()
               except ET.ParseError:
@@ -93,6 +94,9 @@ jobs:
                           detail = failure.get("message") or failure.get("type") or tag
                           body = "".join(failure.itertext()).strip()
                           test_failures.append(f"{case.get('classname', '?')}#{case.get('name', '?')}: {detail}\n{body[:1500]}")
+          if not test_failures and re.search(r"\d+ tests? completed, \d+ failed", "\n".join(lines), re.IGNORECASE):
+              report_names = ", ".join(str(path) for path in junit_reports[:30]) or "none found"
+              test_failures.append(f"Gradle reported failing tests, but no JUnit failure entries were parsed. XML reports found: {report_names}")
 
           report = "Gradle build failure details:\n\n```text\n" + "\n".join(excerpt) + "\n```\n"
           if test_failures:
