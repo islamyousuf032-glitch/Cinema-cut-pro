@@ -81,7 +81,7 @@ jobs:
           excerpt = list(dict.fromkeys((matches[-45:] if matches else lines[-60:]) + context))
 
           test_failures = []
-          for report_path in Path("app/build/test-results/testDebugUnitTest").glob("TEST-*.xml"):
+          for report_path in Path("app/build/test-results/testDebugUnitTest").rglob("TEST-*.xml"):
               try:
                   root = ET.parse(report_path).getroot()
               except ET.ParseError:
@@ -100,6 +100,8 @@ jobs:
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
               summary.write(report)
           message = "\n".join(excerpt)
+          if test_failures:
+              message += "\n\nJUnit test failures:\n" + "\n\n".join(test_failures[:20])
           message = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
           print(f"::error title=Gradle build failure::{message}")
           PY
