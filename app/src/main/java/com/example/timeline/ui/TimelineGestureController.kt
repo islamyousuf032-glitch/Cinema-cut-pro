@@ -27,15 +27,19 @@ object TimelineGestureController {
             val clips = mutableListOf<Float>()
             project.tracks.forEachIndexed { trackIndex, track ->
                 track.clips.forEach { clip ->
-                    val left = NativeTimelineCore.frameToX(clip.timelineStart, pixelsPerFrame)
-                    val right = NativeTimelineCore.frameToX(clip.timelineEnd, pixelsPerFrame)
+                    val left = clip.timelineStart.toFloat() * pixelsPerFrame
+                    val right = clip.timelineEnd.toFloat() * pixelsPerFrame
                     val top = trackIndex * (trackHeight + trackPadding)
                     clips.addAll(listOf(trackIndex.toFloat(), left, top, right, top + trackHeight))
                 }
             }
-            
-            val hitResult = NativeTimelineCore.nativeHitTestClip(x, y, clips.toFloatArray())
-            if (hitResult.hit) {
+
+            // A library may load while one of its JNI entry points is still incompatible with the
+            // current process. Keep pointer handling functional by falling through to Kotlin hit testing.
+            val hitResult = runCatching {
+                NativeTimelineCore.nativeHitTestClip(x, y, clips.toFloatArray())
+            }.getOrNull()
+            if (hitResult?.hit == true) {
                 var currentIdx = 0
                 project.tracks.forEach { track ->
                     track.clips.forEach { clip ->
@@ -46,16 +50,16 @@ object TimelineGestureController {
                     }
                 }
             }
-        } else {
-            project.tracks.forEachIndexed { trackIndex, track ->
-                val top = trackIndex * (trackHeight + trackPadding)
-                val bottom = top + trackHeight
-                track.clips.forEach { clip ->
-                    val left = NativeTimelineCore.frameToX(clip.timelineStart, pixelsPerFrame)
-                    val right = NativeTimelineCore.frameToX(clip.timelineEnd, pixelsPerFrame)
-                    if (x in left..right && y in top..bottom) {
-                        return clip
-                    }
+        }
+
+        project.tracks.forEachIndexed { trackIndex, track ->
+            val top = trackIndex * (trackHeight + trackPadding)
+            val bottom = top + trackHeight
+            track.clips.forEach { clip ->
+                val left = clip.timelineStart.toFloat() * pixelsPerFrame
+                val right = clip.timelineEnd.toFloat() * pixelsPerFrame
+                if (x in left..right && y in top..bottom) {
+                    return clip
                 }
             }
         }
