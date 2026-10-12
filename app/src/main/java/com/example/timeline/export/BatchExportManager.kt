@@ -184,9 +184,11 @@ object BatchExportManager {
             var lastNotificationTime = 0L
             var receivedTerminalProgress = false
             var backendCompleted = false
+            var totalFrames = 0L
 
             backend.render(job) { progress ->
                 if (ExportCancelController.isCancelled) return@render
+                if (progress.totalFrames > 0L) totalFrames = progress.totalFrames
 
                 val now = System.currentTimeMillis()
                 val elapsedMs = now - startTimeMs
