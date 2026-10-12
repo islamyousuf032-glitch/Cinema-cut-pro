@@ -1,6 +1,5 @@
 package com.example.ui.export
 
-import android.content.Intent
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
@@ -14,7 +13,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.example.timeline.export.BatchExportManager
 import com.example.timeline.export.service.ExportState
-import androidx.core.content.FileProvider
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -82,18 +80,18 @@ fun ExportProgressScreen(
                         Spacer(modifier = Modifier.height(24.dp))
                         Text("Export Finished!", style = MaterialTheme.typography.headlineSmall)
                         Spacer(modifier = Modifier.height(8.dp))
-                        Text("Saved to: ${state.outputFile.name}", style = MaterialTheme.typography.bodyMedium)
+                        Text("Saved to: ${state.video.savedLocation}/${state.video.displayName}", style = MaterialTheme.typography.bodyMedium)
                         Spacer(modifier = Modifier.height(32.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                             Button(onClick = {
-                                ExportShareManager.shareVideo(context, state.outputFile)
+                                ExportShareManager.shareVideo(context, state.video)
                             }) {
                                 Text("Share")
                             }
                             Button(onClick = {
-                                ExportShareManager.playVideo(context, state.outputFile)
+                                ExportShareManager.openVideo(context, state.video)
                             }) {
-                                Text("Play")
+                                Text("Open")
                             }
                         }
                         Spacer(modifier = Modifier.height(16.dp))

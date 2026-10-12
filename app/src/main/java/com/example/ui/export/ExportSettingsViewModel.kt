@@ -43,6 +43,18 @@ class ExportSettingsViewModel(application: Application) : AndroidViewModel(appli
         validateSettings()
     }
 
+    /** Keeps an open export dialog bound to timeline edits without resetting its chosen settings. */
+    fun syncProject(project: TimelineProject) {
+        if (_uiState.value.project?.id != project.id) {
+            initProject(project)
+            return
+        }
+        if (_uiState.value.project != project) {
+            _uiState.update { it.copy(project = project) }
+            validateSettings()
+        }
+    }
+
     fun updateSettings(updater: (ExportSettings) -> ExportSettings) {
         _uiState.update {
             val newSettings = updater(it.currentSettings ?: return@update it)
@@ -92,16 +104,39 @@ class ExportSettingsViewModel(application: Application) : AndroidViewModel(appli
         )
 
         val project = state.project
-        val maxEndFrame = project?.tracks?.flatMap { it.clips }?.maxOfOrNull { it.timelineEnd } ?: 0L
+        val enabledVideoClips = project?.tracks
+            ?.filter { it.type == com.example.timeline.core.TrackType.VIDEO && it.isVisible }
+            ?.flatMap { track -> track.clips.filter { it.isEnabled } }
+            .orEmpty()
+        val totalEnabledDurationFrames = runCatching {
+            enabledVideoClips.fold(0L) { total, clip -> Math.addExact(total, clip.duration) }
+        }.getOrNull() ?: 0L
         val projectFps = project?.settings?.getFpsRational()?.toDouble() ?: 0.0
-        val durationSec = if (maxEndFrame > 0L && projectFps > 0.0) maxEndFrame / projectFps else 0.0
-        val estimatedSizeMb = (settings.videoBitrate + settings.audioBitrate) * durationSec / (8 * 1024 * 1024f)
+        val durationSec = if (totalEnabledDurationFrames > 0L && projectFps > 0.0) {
+            totalEnabledDurationFrames / projectFps
+        } else {
+            0.0
+        }
+        val activeVideoTrack = project?.tracks
+            ?.filter { it.type == com.example.timeline.core.TrackType.VIDEO && it.isVisible && it.clips.any { clip -> clip.isEnabled } }
+            ?.singleOrNull()
+        val includesEmbeddedAudio = activeVideoTrack != null && !activeVideoTrack.isMuted &&
+            enabledVideoClips.all { clip ->
+                project?.mediaAssets?.firstOrNull { it.assetId == clip.mediaId }?.metadata?.hasAudio == true
+            }
+        val estimatedBitrate = settings.videoBitrate + if (includesEmbeddedAudio) settings.audioBitrate else 0
+        val estimatedSizeMb = if (validationResult.isValid) {
+            estimatedBitrate * durationSec / (8 * 1024 * 1024f)
+        } else {
+            0f
+        }
+        val estimatedRenderTimeSec = if (validationResult.isValid) (durationSec * 2).toLong() else 0L
 
         _uiState.update {
             it.copy(
                 validationResult = validationResult,
-                estimatedSizeMb = estimatedSizeMb.toFloat(),
-                estimatedRenderTimeSec = (durationSec * 2).toLong()
+                estimatedSizeMb = estimatedSizeMb,
+                estimatedRenderTimeSec = estimatedRenderTimeSec
             )
         }
     }

@@ -34,6 +34,22 @@ object AddToTimelineController {
         return currentStart
     }
 
+    /** The first inserted timeline item is anchored at frame zero, regardless of a stale playhead. */
+    internal fun resolveStartFrame(
+        project: TimelineProject,
+        targetTrack: TimelineTrack,
+        playheadFrame: Long,
+        duration: Long
+    ): Long {
+        // Audio-only clips do not establish the video sequence start. The first video clip
+        // must begin at frame zero even if the project already contains an audio bed.
+        val hasExistingVideoClips = project.tracks.any { track ->
+            track.type == TrackType.VIDEO && track.isVisible && track.clips.any { it.isEnabled }
+        }
+        val desiredStart = if (hasExistingVideoClips) playheadFrame.coerceAtLeast(0L) else 0L
+        return findEmptySpace(targetTrack, desiredStart, duration)
+    }
+
     fun createAddClipCommand(project: TimelineProject, mediaAsset: MediaAsset, playheadFrame: Long, mode: String = "active", selectedTrackId: String? = null): Pair<TimelineProject, TimelineClip> {
         var p = project
         val hasVideo = mediaAsset.metadata.hasVideo || mediaAsset.mimeType.startsWith("image/")
@@ -48,14 +64,18 @@ object AddToTimelineController {
             if (mediaAsset.metadata.durationFramesInSourceRate > 0) mediaAsset.metadata.durationFramesInSourceRate else 150L
         }
 
-        android.util.Log.d("ADD_TO_TIMELINE", "duration projectFrames=$durationProjectFrames")
-
         var primaryClip: TimelineClip? = null
         
         if (hasVideo) {
             var targetTrack: TimelineTrack? = null
             if (mode == "active") {
-                targetTrack = p.tracks.firstOrNull { it.type == TrackType.VIDEO && !it.isLocked }
+                val hasExistingEnabledVisibleVideo = p.tracks.any { track ->
+                    track.type == TrackType.VIDEO && track.isVisible && track.clips.any { it.isEnabled }
+                }
+                targetTrack = p.tracks.firstOrNull { track ->
+                    track.type == TrackType.VIDEO && track.isVisible && !track.isLocked &&
+                        (if (hasExistingEnabledVisibleVideo) track.clips.any { it.isEnabled } else track.clips.isEmpty())
+                }
             }
             if (targetTrack == null) {
                 targetTrack = TimelineTrack(
@@ -67,9 +87,8 @@ object AddToTimelineController {
                 p = p.copy(tracks = p.tracks + targetTrack)
             }
             
-            android.util.Log.d("ADD_TO_TIMELINE", "target track=${targetTrack.name}")
             
-            val startFrame = findEmptySpace(targetTrack, playheadFrame, durationProjectFrames)
+            val startFrame = resolveStartFrame(p, targetTrack, playheadFrame, durationProjectFrames)
             primaryClip = TimelineClip(
                 id = UUID.randomUUID().toString(),
                 trackId = targetTrack.id,
@@ -99,7 +118,7 @@ object AddToTimelineController {
             }
             
             // If primaryClip (video) exists, sync the audio clip's start frame to match it
-            val startFrame = primaryClip?.timelineStart ?: findEmptySpace(targetTrack, playheadFrame, durationProjectFrames)
+            val startFrame = primaryClip?.timelineStart ?: resolveStartFrame(p, targetTrack, playheadFrame, durationProjectFrames)
             val audioClip = TimelineClip(
                 id = UUID.randomUUID().toString(),
                 trackId = targetTrack.id,
@@ -112,7 +131,6 @@ object AddToTimelineController {
             )
             p = CoreTimelineEngine.addClip(p, targetTrack.id, audioClip).project
             if (primaryClip == null) {
-                android.util.Log.d("ADD_TO_TIMELINE", "target track=${targetTrack.name}")
                 primaryClip = audioClip
             }
         }
@@ -130,9 +148,8 @@ object AddToTimelineController {
                 p = p.copy(tracks = p.tracks + targetTrack)
             }
             
-            android.util.Log.d("ADD_TO_TIMELINE", "target track=${targetTrack.name}")
             
-            val startFrame = findEmptySpace(targetTrack, playheadFrame, durationProjectFrames)
+            val startFrame = resolveStartFrame(p, targetTrack, playheadFrame, durationProjectFrames)
             primaryClip = TimelineClip(
                 id = UUID.randomUUID().toString(),
                 trackId = targetTrack.id,

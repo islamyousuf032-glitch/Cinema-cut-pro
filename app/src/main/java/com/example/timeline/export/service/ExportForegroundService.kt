@@ -32,7 +32,7 @@ class ExportForegroundService : Service() {
                         BatchExportManager.runExportInternal(this@ExportForegroundService)
                     } while (BatchExportManager.promoteNextQueuedExport())
                 } catch (cancelled: CancellationException) {
-                    Log.i("ExportService", "Export worker cancelled")
+                    if (com.example.BuildConfig.DEBUG) Log.d("ExportService", "Export worker cancelled")
                 } catch (e: Exception) {
                     Log.e("ExportService", "Export failed", e)
                 } finally {

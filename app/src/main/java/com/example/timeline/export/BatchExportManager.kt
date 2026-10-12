@@ -14,6 +14,7 @@ import com.example.timeline.export.service.ExportCancelController
 import com.example.timeline.export.service.ExportForegroundService
 import com.example.timeline.export.service.ExportNotification
 import com.example.timeline.export.service.ExportProgressRepository
+import com.example.timeline.export.service.ExportedVideoPublisher
 import com.example.timeline.export.service.ExportState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -182,6 +183,7 @@ object BatchExportManager {
 
             var lastNotificationTime = 0L
             var receivedTerminalProgress = false
+            var backendCompleted = false
 
             backend.render(job) { progress ->
                 if (ExportCancelController.isCancelled) return@render
@@ -204,9 +206,8 @@ object BatchExportManager {
                 when (progress.status) {
                     ExportJobStatus.COMPLETED -> {
                         receivedTerminalProgress = true
+                        backendCompleted = true
                         shouldAdvanceQueue = true
-                        ExportProgressRepository.updateState(ExportState.Completed(outputFile))
-                        ExportNotification.showCompletedNotification(serviceContext, outputFile)
                     }
                     ExportJobStatus.FAILED -> {
                         receivedTerminalProgress = true
@@ -238,6 +239,67 @@ object BatchExportManager {
                         }
                     }
                 }
+            }
+
+            if (backendCompleted && ExportCancelController.isCancelled) {
+                outputFile.delete()
+            } else if (backendCompleted) {
+                val saveDestination = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                    "Movies/CinemaCutPro"
+                } else {
+                    "App storage"
+                }
+                val saveStartedAtMs = System.currentTimeMillis()
+                ExportProgressRepository.updateState(
+                    ExportState.Exporting(
+                        stage = "Saving to $saveDestination",
+                        renderedFrames = totalFrames,
+                        totalFrames = totalFrames,
+                        percent = 0.99f,
+                        elapsedMs = saveStartedAtMs - startTimeMs,
+                        estimatedRemainingMs = 0L
+                    )
+                )
+                var lastCopyUiUpdateTime = 0L
+                var lastCopyNotificationTime = 0L
+                val exportedVideo = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    ExportedVideoPublisher.publish(
+                        context = serviceContext,
+                        stagingFile = outputFile,
+                        isCancelled = { ExportCancelController.isCancelled }
+                    ) { copiedBytes, totalBytes ->
+                        val copyFraction = if (totalBytes > 0L) {
+                            (copiedBytes.toFloat() / totalBytes.toFloat()).coerceIn(0f, 1f)
+                        } else {
+                            1f
+                        }
+                        val percent = (0.99f + 0.01f * copyFraction).coerceIn(0.99f, 1f)
+                        val now = System.currentTimeMillis()
+                        if (now - lastCopyUiUpdateTime >= 100L || copiedBytes >= totalBytes) {
+                            ExportProgressRepository.updateState(
+                                ExportState.Exporting(
+                                    stage = "Saving to $saveDestination",
+                                    renderedFrames = totalFrames,
+                                    totalFrames = totalFrames,
+                                    percent = percent,
+                                    elapsedMs = now - startTimeMs,
+                                    estimatedRemainingMs = 0L
+                                )
+                            )
+                            lastCopyUiUpdateTime = now
+                        }
+                        if (now - lastCopyNotificationTime > 500L || copiedBytes >= totalBytes) {
+                            ExportNotification.updateProgress(
+                                serviceContext,
+                                (percent * 100f).toInt().coerceIn(99, 100),
+                                "Saving to $saveDestination"
+                            )
+                            lastCopyNotificationTime = now
+                        }
+                    }
+                }
+                ExportProgressRepository.updateState(ExportState.Completed(exportedVideo))
+                ExportNotification.showCompletedNotification(serviceContext, exportedVideo)
             }
 
             if (!receivedTerminalProgress && !ExportCancelController.isCancelled) {

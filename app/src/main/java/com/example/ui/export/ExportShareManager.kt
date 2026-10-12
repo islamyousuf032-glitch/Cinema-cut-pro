@@ -1,35 +1,30 @@
 package com.example.ui.export
 
+import android.content.ClipData
 import android.content.Context
 import android.content.Intent
-import androidx.core.content.FileProvider
-import java.io.File
+import com.example.timeline.export.service.ExportedVideo
 
 object ExportShareManager {
-    fun shareVideo(context: Context, videoFile: File) {
-        val uri = FileProvider.getUriForFile(context, "${context.packageName}.provider", videoFile)
+    fun shareVideo(context: Context, video: ExportedVideo) {
         val shareIntent = Intent(Intent.ACTION_SEND).apply {
-            type = "video/*"
-            putExtra(Intent.EXTRA_STREAM, uri)
+            type = video.mimeType
+            putExtra(Intent.EXTRA_STREAM, video.uri)
+            clipData = ClipData.newUri(context.contentResolver, video.displayName, video.uri)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
-        try {
+        runCatching {
             context.startActivity(Intent.createChooser(shareIntent, "Share Video"))
-        } catch (e: Exception) {
-            e.printStackTrace()
         }
     }
 
-    fun playVideo(context: Context, videoFile: File) {
-        val uri = FileProvider.getUriForFile(context, "${context.packageName}.provider", videoFile)
+    fun openVideo(context: Context, video: ExportedVideo) {
         val intent = Intent(Intent.ACTION_VIEW).apply {
-            setDataAndType(uri, "video/*")
+            setDataAndType(video.uri, video.mimeType)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
-        try {
+        runCatching {
             context.startActivity(intent)
-        } catch (e: Exception) {
-            e.printStackTrace()
         }
     }
 }

@@ -2,6 +2,7 @@ package com.example.timeline.export.backend
 
 import com.example.model.adjustments.AdjustmentStack
 import com.example.model.adjustments.VideoAdjustmentParams
+import com.example.model.adjustments.Vector3
 
 /**
  * Defines the deliberately small set of clip adjustments rendered by the Media3 export adapter.
@@ -21,27 +22,15 @@ internal object Media3ClipAdjustmentSupport {
             params.vibrance != defaults.vibrance ||
             params.temperature != defaults.temperature ||
             params.tint != defaults.tint ||
+            params.lift != defaults.lift ||
+            params.gamma != defaults.gamma ||
+            params.gain != defaults.gain ||
+            params.offsetWheel != defaults.offsetWheel ||
             params.sharpness != defaults.sharpness ||
             params.clarity != defaults.clarity ||
             params.structure != defaults.structure
 
-    /** Native parameter order: exposure, brightness, contrast, saturation, vibrance, temperature,
-     * tint, then the combined sharpness/clarity/structure amount. */
-    fun nativeParameters(params: VideoAdjustmentParams): FloatArray = floatArrayOf(
-        params.exposureStops,
-        params.brightness,
-        params.contrast,
-        params.saturation,
-        params.vibrance,
-        params.temperature,
-        params.tint,
-        params.sharpness * 2f + params.clarity * 0.5f + params.structure * 0.5f
-    )
-
-    fun validationErrors(
-        stack: AdjustmentStack,
-        nativeEngineAvailable: Boolean
-    ): List<String> {
+    fun validationErrors(stack: AdjustmentStack): List<String> {
         if (!stack.enabled) return emptyList()
 
         val errors = mutableListOf<String>()
@@ -62,10 +51,6 @@ internal object Media3ClipAdjustmentSupport {
             errors += "Clip-adjustment values are outside their supported ranges: ${invalidValues.joinToString()}."
         }
 
-        if (hasRenderableAdjustments(stack) && !nativeEngineAvailable) {
-            errors += "The native color-adjustment engine is unavailable on this device; clip adjustments cannot be exported."
-        }
-
         return errors
     }
 
@@ -77,6 +62,10 @@ internal object Media3ClipAdjustmentSupport {
         addIfOutOfRange("vibrance", params.vibrance, -1f, 1f)
         addIfOutOfRange("temperature", params.temperature, -1f, 1f)
         addIfOutOfRange("tint", params.tint, -1f, 1f)
+        addVectorIfOutOfRange("lift", params.lift, -1f, 1f)
+        addVectorIfOutOfRange("gamma", params.gamma, 0.1f, 2f)
+        addVectorIfOutOfRange("gain", params.gain, 0f, 2f)
+        addVectorIfOutOfRange("offset wheel", params.offsetWheel, -1f, 1f)
         addIfOutOfRange("sharpness", params.sharpness, 0f, 1f)
         addIfOutOfRange("mid detail", params.clarity, -1f, 1f)
         addIfOutOfRange("structure", params.structure, -1f, 1f)
@@ -89,6 +78,15 @@ internal object Media3ClipAdjustmentSupport {
         maximum: Float
     ) {
         if (!value.isFinite() || value < minimum || value > maximum) add(name)
+    }
+
+    private fun MutableList<String>.addVectorIfOutOfRange(
+        name: String,
+        value: Vector3,
+        minimum: Float,
+        maximum: Float
+    ) {
+        if (listOf(value.x, value.y, value.z).any { !it.isFinite() || it < minimum || it > maximum }) add(name)
     }
 
     private fun FloatArray?.hasActiveHslValues(): Boolean =
@@ -113,9 +111,6 @@ internal object Media3ClipAdjustmentSupport {
             params.vignetteRoundness != defaults.vignetteRoundness
         ) add("vignette")
 
-        if (params.lift != defaults.lift || params.gamma != defaults.gamma || params.gain != defaults.gain ||
-            params.offsetWheel != defaults.offsetWheel
-        ) add("color wheels")
         if (params.skinToneProtection != defaults.skinToneProtection ||
             params.skinToneShowMask != defaults.skinToneShowMask ||
             params.skinToneHueCenter != defaults.skinToneHueCenter ||

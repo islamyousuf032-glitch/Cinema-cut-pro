@@ -40,12 +40,13 @@ class ExportPerformanceMonitor {
         val renderFps = if (durationSec > 0) framesProcessed / durationSec else 0f
         val encodeFps = if (durationSec > 0) framesEncoded / durationSec else 0f
         
-        Log.i("ExportPerf", "=== EXPORT PERFORMANCE REPORT ===")
-        Log.i("ExportPerf", "Duration: \${durationSec}s")
-        Log.i("ExportPerf", "Frames Rendered: \$framesProcessed (\$renderFps FPS)")
-        Log.i("ExportPerf", "Frames Encoded: \$framesEncoded (\$encodeFps FPS)")
-        Log.i("ExportPerf", "Frames Dropped: \$framesDropped")
-        Log.i("ExportPerf", "Native Stats: \$nativeStats")
+        if (com.example.BuildConfig.DEBUG) {
+            Log.d("ExportPerf", "Duration: ${durationSec}s")
+            Log.d("ExportPerf", "Frames rendered: $framesProcessed ($renderFps FPS)")
+            Log.d("ExportPerf", "Frames encoded: $framesEncoded ($encodeFps FPS)")
+            Log.d("ExportPerf", "Frames dropped: $framesDropped")
+            Log.d("ExportPerf", "Native stats: $nativeStats")
+        }
         
         return ExportBenchmark(
             durationMs = durationMs,

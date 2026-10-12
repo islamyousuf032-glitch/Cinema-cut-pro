@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.unit.dp
@@ -43,6 +44,7 @@ fun CineTimelineCanvas(
 ) {
     var scrollX by remember { mutableStateOf(0f) }
     var scrollY by remember { mutableStateOf(0f) }
+    var maxVerticalScroll by remember { mutableFloatStateOf(0f) }
     var isDragging by remember { mutableStateOf(false) }
     
     var contextMenuVisible by remember { mutableStateOf(false) }
@@ -63,17 +65,25 @@ fun CineTimelineCanvas(
             onZoomChange(pixelsPerFrame * zoomChange)
         }
         scrollX = max(0f, scrollX - panChange.x)
-        scrollY = max(0f, scrollY - panChange.y)
+        scrollY = (scrollY - panChange.y).coerceIn(0f, maxVerticalScroll)
     }
     
     BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
+            .clipToBounds()
             .background(Color(0xFF0A0A0A))
             .transformable(transformableState)
     ) {
         val viewportWidth = constraints.maxWidth
         val centerX = viewportWidth / 2f
+        val contentHeightPx = 40.dp.toPx() + uiState.project.tracks.size * (trackHeight + trackPadding)
+        val maxScrollY = max(0f, contentHeightPx - constraints.maxHeight.toFloat())
+        SideEffect {
+            if (maxVerticalScroll != maxScrollY) maxVerticalScroll = maxScrollY
+            val boundedScrollY = scrollY.coerceIn(0f, maxScrollY)
+            if (scrollY != boundedScrollY) scrollY = boundedScrollY
+        }
         
         val isFollowing by FollowPlayheadController.isFollowing.collectAsState()
         // Auto-center playhead if needed (only horizontal)
@@ -103,7 +113,7 @@ fun CineTimelineCanvas(
                             onMoveUp = { onMoveTrack(track.id, index - 1) },
                             onMoveDown = { onMoveTrack(track.id, index + 1) },
                             modifier = Modifier
-                                .height(with(androidx.compose.ui.platform.LocalDensity.current) { trackHeight.toDp() })
+                                .height(with(androidx.compose.ui.platform.LocalDensity.current) { (trackHeight + trackPadding).toDp() })
                                 .padding(bottom = with(androidx.compose.ui.platform.LocalDensity.current) { trackPadding.toDp() })
                         )
                     }
@@ -168,7 +178,7 @@ fun CineTimelineCanvas(
                                 when (val action = dragAction) {
                                     is TimelineDragAction.Pan -> {
                                         scrollX = max(0f, scrollX - dragAmount.x)
-                                        scrollY = max(0f, scrollY - dragAmount.y)
+                                        scrollY = (scrollY - dragAmount.y).coerceIn(0f, maxVerticalScroll)
                                     }
                                     is TimelineDragAction.ScrubPlayhead -> {
                                         val frame = NativeTimelineCore.xToFrame(change.position.x + scrollX, pixelsPerFrame)

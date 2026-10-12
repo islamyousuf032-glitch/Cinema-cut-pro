@@ -107,11 +107,16 @@ object TimelineGestureController {
         pixelsPerFrame: Float,
         excludeClipId: String? = null
     ): Long {
-        if (!NativeTimelineCore.isAvailable()) return inputFrame
+        if (!NativeTimelineCore.isAvailable()) {
+            val fps = Math.round(project.settings.getFpsRational().toFloat()).coerceAtLeast(1)
+            return SnapController().snapFrame(inputFrame, project, playheadFrame, pixelsPerFrame, excludeClipId, fps)
+        }
         
         val targetFrames = mutableListOf<Long>()
         val targetTypes = mutableListOf<Int>()
         
+        targetFrames.add(0L)
+        targetTypes.add(1) // timeline start
         targetFrames.add(playheadFrame)
         targetTypes.add(0) // playhead
         

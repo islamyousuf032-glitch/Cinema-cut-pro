@@ -15,6 +15,7 @@ import androidx.media3.transformer.AudioEncoderSettings
 import androidx.media3.transformer.Composition
 import androidx.media3.transformer.DefaultEncoderFactory
 import androidx.media3.transformer.EditedMediaItem
+import androidx.media3.transformer.EditedMediaItemSequence
 import androidx.media3.transformer.Effects
 import androidx.media3.transformer.ExportException
 import androidx.media3.transformer.ExportResult
@@ -50,7 +51,6 @@ import com.example.timeline.export.model.ExportJobStatus
 import com.example.timeline.export.model.ExportProgress
 import com.example.timeline.export.model.ExportSettings
 import com.example.timeline.export.model.ExportValidationResult
-import com.example.timeline.export.native.NativeExportCore
 import com.example.timeline.media.FrameRate
 import com.example.timeline.media.MediaAsset
 import kotlinx.coroutines.CancellationException
@@ -70,10 +70,10 @@ import kotlin.math.roundToLong
 /**
  * A deliberately bounded real export backend.
  *
- * Media3 owns Android demux/decode/encode/mux orchestration. This adapter only accepts a single,
- * unlayered CFR video clip whose edits can be represented exactly by a trim and a presentation
- * resize. Everything else is rejected before export; it is never handed to one of the placeholder
- * exporters.
+ * Media3 owns Android demux/decode/encode/mux orchestration. This adapter accepts a single visible,
+ * unlayered video track containing one or more contiguous CFR clips whose edits can be represented
+ * exactly by trims and a presentation resize. Gaps must be fixed on the timeline before export.
+ * Everything else is rejected before export; it is never handed to a placeholder exporter.
  */
 @OptIn(UnstableApi::class)
 class Media3TransformerBackend(context: Context) : ExportBackend {
@@ -90,13 +90,17 @@ class Media3TransformerBackend(context: Context) : ExportBackend {
         val asset: MediaAsset
     )
 
-    private data class ExportPlan(
+    private data class ExportClipPlan(
         val sourceUri: Uri,
         val startPositionUs: Long,
         val endPositionUs: Long,
-        val outputFrameCount: Long,
-        val includeAudio: Boolean,
         val adjustmentParams: VideoAdjustmentParams?
+    )
+
+    private data class ExportPlan(
+        val clips: List<ExportClipPlan>,
+        val outputFrameCount: Long,
+        val includeAudio: Boolean
     )
 
     private data class ActiveExport(
@@ -126,7 +130,8 @@ class Media3TransformerBackend(context: Context) : ExportBackend {
         supportsHDR = false,
         supportsAlpha = false,
         supportsAudioMix = false,
-        supportsVideoComposition = false,
+        // Supports sequential single-track compositions, but not overlays or multiple active tracks.
+        supportsVideoComposition = true,
         supportsProRes = false,
         supportsAV1 = false,
         supports10Bit = false,
@@ -195,29 +200,34 @@ class Media3TransformerBackend(context: Context) : ExportBackend {
                 }
             }
 
-            val sourceItem = MediaItem.Builder()
-                .setUri(plan.sourceUri)
-                .setClippingConfiguration(
-                    MediaItem.ClippingConfiguration.Builder()
-                        .setStartPositionUs(plan.startPositionUs)
-                        .setEndPositionUs(plan.endPositionUs)
-                        .build()
-                )
-                .build()
-            val videoEffects = buildList<Effect> {
-                plan.adjustmentParams?.let { add(createMedia3ClipAdjustmentEffect(it)) }
-                add(
-                    Presentation.createForWidthAndHeight(
-                        job.settings.resolutionWidth,
-                        job.settings.resolutionHeight,
-                        Presentation.LAYOUT_SCALE_TO_FIT
+            val editedItems = plan.clips.map { clipPlan ->
+                val sourceItem = MediaItem.Builder()
+                    .setUri(clipPlan.sourceUri)
+                    .setClippingConfiguration(
+                        MediaItem.ClippingConfiguration.Builder()
+                            .setStartPositionUs(clipPlan.startPositionUs)
+                            .setEndPositionUs(clipPlan.endPositionUs)
+                            .build()
                     )
-                )
+                    .build()
+                val videoEffects = buildList<Effect> {
+                    clipPlan.adjustmentParams?.let { add(createMedia3ClipAdjustmentEffect(it)) }
+                    add(
+                        Presentation.createForWidthAndHeight(
+                            job.settings.resolutionWidth,
+                            job.settings.resolutionHeight,
+                            Presentation.LAYOUT_SCALE_TO_FIT
+                        )
+                    )
+                }
+                EditedMediaItem.Builder(sourceItem)
+                    .setRemoveAudio(!plan.includeAudio)
+                    .setEffects(Effects(emptyList(), videoEffects))
+                    .build()
             }
-            val editedItem = EditedMediaItem.Builder(sourceItem)
-                .setRemoveAudio(!plan.includeAudio)
-                .setEffects(Effects(emptyList(), videoEffects))
-                .build()
+            val composition = Composition.Builder(
+                EditedMediaItemSequence.Builder(editedItems).build()
+            ).build()
 
             val videoBitrateMode = when (job.settings.bitrateMode) {
                 ExportSettings.BitrateMode.CBR -> android.media.MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR
@@ -262,7 +272,7 @@ class Media3TransformerBackend(context: Context) : ExportBackend {
                 val active = ActiveExport(builtTransformer, listener)
                 activeExports[job.jobId] = active
                 activeExport = active
-                builtTransformer.start(editedItem, targetOutputFile.absolutePath)
+                builtTransformer.start(composition, targetOutputFile.absolutePath)
                 builtTransformer
             }
 
@@ -401,19 +411,40 @@ class Media3TransformerBackend(context: Context) : ExportBackend {
         }
         if (settings.normalizeAudio) errors += "Audio normalization is not supported by this export path yet."
 
-        val enabledVisibleVideoClips = project.tracks
-            .filter { it.type == TrackType.VIDEO && it.isVisible }
-            .flatMap { track -> track.clips.filter { it.isEnabled }.map { track to it } }
-        if (enabledVisibleVideoClips.size != 1) {
-            errors += "Exactly one enabled clip on a visible video track is supported."
+        val activeVideoTracks = project.tracks.filter { track ->
+            track.type == TrackType.VIDEO && track.isVisible && track.clips.any { it.isEnabled }
+        }
+        if (activeVideoTracks.size != 1) {
+            errors += "Exactly one enabled visible video track is supported by this export path."
+        }
+        val activeVideoTrack = activeVideoTracks.singleOrNull()
+        val enabledVideoClips = activeVideoTrack?.clips?.filter { it.isEnabled }.orEmpty()
+        if (enabledVideoClips.isEmpty()) {
+            errors += "At least one enabled clip on a visible video track is required."
+        }
+        val activeClips = enabledVideoClips.mapNotNull { clip ->
+            val asset = project.mediaAssets.firstOrNull { it.assetId == clip.mediaId }
+            asset?.let { ActiveClip(clip, activeVideoTrack!!, it) }
+        }
+        if (activeClips.size != enabledVideoClips.size && enabledVideoClips.isNotEmpty()) {
+            errors += "One or more active video clips are missing their imported media asset."
         }
 
-        val activeTrackClip = enabledVisibleVideoClips.singleOrNull()?.let { (track, clip) ->
-            val asset = project.mediaAssets.firstOrNull { it.assetId == clip.mediaId }
-            if (asset != null) ActiveClip(clip, track, asset) else null
-        }
-        if (activeTrackClip == null && enabledVisibleVideoClips.size == 1) {
-            errors += "The active video clip is missing its imported media asset."
+        val orderedClips = activeClips.sortedBy { it.clip.timelineStart }
+        if (orderedClips.isNotEmpty()) {
+            if (orderedClips.first().clip.timelineStart != 0L) {
+                errors += "The supported clip must start at timeline frame zero (the first enabled video clip)."
+            }
+            var expectedTimelineStart = 0L
+            orderedClips.forEach { active ->
+                val clip = active.clip
+                if (clip.timelineStart > expectedTimelineStart) {
+                    errors += "Video gaps are not supported by Media3; use Fix automatically to close the gap."
+                } else if (clip.timelineStart < expectedTimelineStart) {
+                    errors += "Overlapping clips on the same video track are not supported by this export path."
+                }
+                expectedTimelineStart = maxOf(expectedTimelineStart, clip.timelineEnd)
+            }
         }
 
         val visibleAudioClips = project.tracks
@@ -436,18 +467,25 @@ class Media3TransformerBackend(context: Context) : ExportBackend {
             errors += "This export path supports an 8-bit Rec.709 SDR project only."
         }
 
-        val clipData = activeTrackClip
-        if (clipData != null) {
-            val (clip, track, asset) = clipData
-            if (clip.type != ClipType.MEDIA) errors += "Only a regular media clip can be exported by this path."
-            if (clip.timelineStart != 0L) errors += "The supported clip must start at timeline frame zero."
-            if (clip.duration <= 0L) errors += "The active clip has no duration."
+        val projectFps = project.settings.getFpsRational()
+        if (projectFps.numerator <= 0 || projectFps.denominator <= 0) {
+            errors += "The project frame rate must be valid before exporting."
+        }
+
+        var embeddedAudioPresent: Boolean? = null
+        val audioFormats = mutableSetOf<Pair<Int, Int>>()
+        activeClips.forEach { active ->
+            val (clip, track, asset) = active
+            if (clip.type != ClipType.MEDIA) errors += "Only regular media clips can be exported by this path."
+            if (clip.duration <= 0L) errors += "An active video clip has no duration."
             if (!asset.metadata.hasVideo || asset.assetType != com.example.timeline.media.MediaAssetType.VIDEO) {
-                errors += "The active timeline clip must reference imported video media."
+                errors += "Every active timeline clip must reference imported video media."
             }
-            if (asset.metadata.durationUs <= 0L) errors += "The imported video has no usable duration metadata."
+            if (asset.metadata.durationUs <= 0L) errors += "An imported video has no usable duration metadata."
             if (asset.metadata.isVariableFrameRate) {
-                errors += "Variable-frame-rate source video is not supported until frame-accurate retiming is implemented."
+                errors += "Variable-frame-rate media cannot be conformed to project FPS by this Media3 path yet; export is blocked and the original remains unchanged."
+            } else if (!asset.metadata.variableFrameRateDetectionComplete) {
+                errors += "Video timestamp cadence is unverified; reanalyze the source before export."
             }
             if (asset.metadata.videoStreams.any { it.isHdr || it.isLog || (it.bitDepth ?: 8) > 8 }) {
                 errors += "HDR, log, and greater-than-8-bit sources are not supported by this SDR export path."
@@ -458,66 +496,67 @@ class Media3TransformerBackend(context: Context) : ExportBackend {
             if (clip.volume != 1f && !track.isMuted) {
                 errors += "Per-clip volume changes are not supported by this export path yet."
             }
-            val adjustmentStack = clip.adjustments
-            val nativeAdjustmentEngineAvailable =
-                !Media3ClipAdjustmentSupport.hasRenderableAdjustments(adjustmentStack) || NativeExportCore.isAvailable()
-            errors += Media3ClipAdjustmentSupport.validationErrors(
-                adjustmentStack,
-                nativeEngineAvailable = nativeAdjustmentEngineAvailable
-            )
+            errors += Media3ClipAdjustmentSupport.validationErrors(clip.adjustments)
             if (hasEnabledGrade(clip.colorGrade) || hasEnabledColorLayers(clip.colorLayers)) {
                 errors += "Clip color grades and LUT layers are not supported by this export path yet."
             }
 
-            val projectFps = project.settings.getFpsRational()
-            if (projectFps.numerator <= 0 || projectFps.denominator <= 0) {
-                errors += "The project frame rate must be valid before exporting."
-            } else if (clip.sourceIn < 0L || clip.sourceOut < 0L) {
-                errors += "The clip trim range cannot use negative source frames."
-            } else {
+            if (clip.sourceIn < 0L || clip.sourceOut < 0L) {
+                errors += "Clip trim ranges cannot use negative source frames."
+            } else if (projectFps.numerator > 0 && projectFps.denominator > 0) {
                 val trimRange = runCatching {
                     framesToUs(clip.sourceIn, projectFps) to framesToUs(clip.sourceOut, projectFps)
                 }.getOrNull()
                 if (trimRange == null) {
-                    errors += "The clip trim range is too large to represent safely."
+                    errors += "A clip trim range is too large to represent safely."
                 } else {
                     val (sourceInUs, sourceOutUs) = trimRange
                     val frameToleranceUs = ((1_000_000.0 / projectFps.toDouble()).roundToLong()).coerceAtLeast(1L)
                     if (sourceOutUs <= sourceInUs || sourceOutUs > asset.metadata.durationUs + frameToleranceUs) {
-                        errors += "The clip trim range is outside the imported video's duration."
+                        errors += "A clip trim range is outside its imported video's duration."
                     }
                 }
             }
 
             val expectedSourceFrameRate = asset.metadata.exactFrameRate ?: asset.metadata.estimatedFrameRate
             if (expectedSourceFrameRate == null || !frameRatesMatch(expectedSourceFrameRate, settings.frameRate)) {
-                errors += "Media3 preserves the source frame rate; set export FPS to match the constant-frame-rate source."
+                errors += "Media3 preserves each source frame rate; set export FPS to match every constant-frame-rate source."
             }
-
             val sourceUriString = asset.localOriginalUriString?.takeIf { it.isNotBlank() } ?: asset.originalUriString
-            if (sourceUriString.isBlank()) errors += "The imported video has no readable source URI."
+            if (sourceUriString.isBlank()) errors += "An imported video has no readable source URI."
 
-            val includeAudio = asset.metadata.hasAudio && !track.isMuted
-            if (includeAudio) {
-                if (asset.metadata.audioStreams.size != 1) {
-                    errors += "Exactly one embedded audio stream is supported; separate audio editing is not supported."
-                } else {
-                    val audio = asset.metadata.audioStreams.single()
-                    if (audio.sampleRate != settings.audioSampleRate || audio.channelCount != settings.audioChannels) {
-                        errors += "For this export path, AAC sample rate and channels must match the source audio (${audio.sampleRate} Hz, ${audio.channelCount} channel(s))."
-                    }
-                    if (audio.channelCount !in 1..2) {
-                        errors += "Only mono or stereo embedded audio is supported by this export path."
-                    }
-                    if (!hasAudioEncoder(settings.audioSampleRate, settings.audioChannels)) {
-                        errors += "No Android AAC encoder supports the requested source audio format."
+            if (!track.isMuted) {
+                if (embeddedAudioPresent == null) {
+                    embeddedAudioPresent = asset.metadata.hasAudio
+                } else if (embeddedAudioPresent != asset.metadata.hasAudio) {
+                    errors += "All clips on the exported video sequence must either contain embedded audio or be muted."
+                }
+                if (asset.metadata.hasAudio) {
+                    if (asset.metadata.audioStreams.size != 1) {
+                        errors += "Exactly one embedded audio stream per clip is supported; separate audio editing is not supported."
+                    } else {
+                        val audio = asset.metadata.audioStreams.single()
+                        audioFormats += (audio.sampleRate to audio.channelCount)
+                        if (audio.sampleRate != settings.audioSampleRate || audio.channelCount != settings.audioChannels) {
+                            errors += "For this export path, AAC sample rate and channels must match every source clip."
+                        }
+                        if (audio.channelCount !in 1..2) {
+                            errors += "Only mono or stereo embedded audio is supported by this export path."
+                        }
                     }
                 }
             }
-
-            if (!hasVideoEncoder(settings)) {
-                errors += "No Android H.264 encoder supports the requested resolution, frame rate, and bitrate."
-            }
+        }
+        if (audioFormats.size > 1) {
+            errors += "Embedded audio formats must use the same sample rate and channel count across all clips."
+        }
+        val includeAudio = activeVideoTrack?.isMuted == false && activeClips.isNotEmpty() &&
+            activeClips.all { it.asset.metadata.hasAudio }
+        if (includeAudio && !hasAudioEncoder(settings.audioSampleRate, settings.audioChannels)) {
+            errors += "No Android AAC encoder supports the requested source audio format."
+        }
+        if (activeClips.isNotEmpty() && !hasVideoEncoder(settings)) {
+            errors += "No Android H.264 encoder supports the requested resolution, frame rate, and bitrate."
         }
 
         return errors.distinct()
@@ -533,17 +572,15 @@ class Media3TransformerBackend(context: Context) : ExportBackend {
         ) {
             warnings += "Media3 requests the target average bitrate; a separate maximum bitrate is not independently enforced by this adapter."
         }
-        val activePair = project.tracks
+        val activeAssets = project.tracks
             .filter { it.type == TrackType.VIDEO && it.isVisible }
-            .flatMap { track -> track.clips.filter { it.isEnabled }.map { track to it } }
-            .singleOrNull()
-        val activeClip = activePair?.second
-        if (activeClip != null && Media3ClipAdjustmentSupport.hasRenderableAdjustments(activeClip.adjustments)) {
-            warnings += "Clip color adjustments use native CPU frame processing and can increase export time, especially at high resolution."
+            .flatMap { track -> track.clips.filter { it.isEnabled } }
+            .mapNotNull { clip -> project.mediaAssets.firstOrNull { it.assetId == clip.mediaId } }
+        if (activeAssets.any { it.metadata.exactFrameRate == null && it.metadata.estimatedFrameRate != null }) {
+            warnings += "One or more source frame rates are estimated from import metadata; verify they are constant-frame-rate."
         }
-        val asset = activeClip?.let { clip -> project.mediaAssets.firstOrNull { it.assetId == clip.mediaId } }
-        if (asset?.metadata?.exactFrameRate == null && asset?.metadata?.estimatedFrameRate != null) {
-            warnings += "The source frame rate is estimated from import metadata; verify the source is constant-frame-rate."
+        if (activeAssets.size > 1) {
+            warnings += "Video clips are exported as a sequential Media3 composition after timeline gaps are closed."
         }
         return warnings
     }
@@ -551,32 +588,36 @@ class Media3TransformerBackend(context: Context) : ExportBackend {
     private fun createPlanOrThrow(settings: ExportSettings, project: TimelineProject): ExportPlan {
         val errors = collectValidationErrors(settings, project)
         require(errors.isEmpty()) { errors.joinToString("\n") }
-        val clip = project.tracks
-            .asSequence()
-            .filter { it.type == TrackType.VIDEO && it.isVisible }
-            .flatMap { track -> track.clips.asSequence().filter { it.isEnabled }.map { track to it } }
+        val track = project.tracks
+            .filter { it.type == TrackType.VIDEO && it.isVisible && it.clips.any { clip -> clip.isEnabled } }
             .single()
-        val track = clip.first
-        val timelineClip = clip.second
-        val asset = project.mediaAssets.single { it.assetId == timelineClip.mediaId }
-        val sourceUriString = asset.localOriginalUriString?.takeIf { it.isNotBlank() } ?: asset.originalUriString
-        val parsedUri = Uri.parse(sourceUriString)
-        val sourceUri = if (parsedUri.scheme == null) Uri.fromFile(File(sourceUriString)) else parsedUri
         val projectFps = project.settings.getFpsRational()
-        val startUs = framesToUs(timelineClip.sourceIn, projectFps)
-        val endUs = framesToUs(timelineClip.sourceOut, projectFps)
-        val includeAudio = asset.metadata.hasAudio && !track.isMuted
-        val durationUs = endUs - startUs
-        val outputFrames = framesAtRate(durationUs, settings.frameRate).coerceAtLeast(1L)
+        val enabledClips = track.clips.filter { it.isEnabled }.sortedBy { it.timelineStart }
+        val clipPlans = enabledClips.map { timelineClip ->
+            val asset = project.mediaAssets.first { it.assetId == timelineClip.mediaId }
+            val sourceUriString = asset.localOriginalUriString?.takeIf { it.isNotBlank() } ?: asset.originalUriString
+            val parsedUri = Uri.parse(sourceUriString)
+            val sourceUri = if (parsedUri.scheme == null) Uri.fromFile(File(sourceUriString)) else parsedUri
+            ExportClipPlan(
+                sourceUri = sourceUri,
+                startPositionUs = framesToUs(timelineClip.sourceIn, projectFps),
+                endPositionUs = framesToUs(timelineClip.sourceOut, projectFps),
+                adjustmentParams = timelineClip.adjustments.params.takeIf {
+                    Media3ClipAdjustmentSupport.hasRenderableAdjustments(timelineClip.adjustments)
+                }
+            )
+        }
+        val totalDurationUs = clipPlans.fold(0L) { totalUs, clip ->
+            Math.addExact(totalUs, clip.endPositionUs - clip.startPositionUs)
+        }
+        val outputFrames = framesAtRate(totalDurationUs, settings.frameRate).coerceAtLeast(1L)
+        val includeAudio = !track.isMuted && enabledClips.all { clip ->
+            project.mediaAssets.first { it.assetId == clip.mediaId }.metadata.hasAudio
+        }
         return ExportPlan(
-            sourceUri = sourceUri,
-            startPositionUs = startUs,
-            endPositionUs = endUs,
+            clips = clipPlans,
             outputFrameCount = outputFrames,
-            includeAudio = includeAudio,
-            adjustmentParams = timelineClip.adjustments.params.takeIf {
-                Media3ClipAdjustmentSupport.hasRenderableAdjustments(timelineClip.adjustments)
-            }
+            includeAudio = includeAudio
         )
     }
 

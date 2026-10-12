@@ -110,7 +110,7 @@ class VideoExportPipeline(
                             source = ExportDecodeSource(context, Uri.parse(topLayer.mediaAsset.localOriginalUriString ?: topLayer.mediaAsset.originalUriString))
                             source.prepare()
                             sources[assetId] = source
-                            Log.i("ExportPipeline", "Prepared decode source: ${assetId}")
+                            if (com.example.BuildConfig.DEBUG) Log.d("ExportPipeline", "Prepared decode source: $assetId")
                         }
                         
                         val targetTimeUs = topLayer.sourceTimeUs
@@ -302,7 +302,7 @@ class VideoExportPipeline(
                     perfMonitor.generateReport()
                 }
             } catch (e: Exception) {
-                e.printStackTrace()
+                if (com.example.BuildConfig.DEBUG) e.printStackTrace()
                 progressTracker.fail(e.message ?: "Export failed due to unknown error")
             } finally {
                 decodedFrames.forEach { (assetId, frame) ->

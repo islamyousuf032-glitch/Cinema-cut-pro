@@ -5,7 +5,7 @@ import com.example.model.adjustments.AdjustmentStack
 import com.example.model.adjustments.KeyframeInterpolation
 import com.example.model.adjustments.TargetType
 import com.example.model.adjustments.VideoAdjustmentParams
-import org.junit.Assert.assertArrayEquals
+import com.example.model.adjustments.Vector3
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -15,41 +15,50 @@ class Media3ClipAdjustmentSupportTest {
         AdjustmentStack("stack", TargetType.CLIP, "clip", params = params)
 
     @Test
-    fun screenshotPrimarySettingsAreSupportedAndPassedToNativeRenderer() {
+    fun primarySettingsAreSupportedByTheSharedGpuEffect() {
         val params = VideoAdjustmentParams.default().copy(
             contrast = 0.20f,
             saturation = 1.20f,
             vibrance = 0.31f,
             temperature = 0.26f,
             tint = 0.40f,
+            lift = Vector3(0.10f, -0.05f, 0.02f),
+            gamma = Vector3(1.10f, 0.95f, 1.20f),
+            gain = Vector3(1.10f, 0.90f, 1.25f),
+            offsetWheel = Vector3(0.03f, -0.02f, 0.01f),
             clarity = 0.03f
         )
         val adjustments = stack(params)
 
-        assertTrue(Media3ClipAdjustmentSupport.validationErrors(adjustments, nativeEngineAvailable = true).isEmpty())
+        assertTrue(Media3ClipAdjustmentSupport.validationErrors(adjustments).isEmpty())
         assertTrue(Media3ClipAdjustmentSupport.hasRenderableAdjustments(adjustments))
-        assertArrayEquals(
-            floatArrayOf(0f, 0f, 0.20f, 1.20f, 0.31f, 0.26f, 0.40f, 0.015f),
-            Media3ClipAdjustmentSupport.nativeParameters(params),
-            0.0001f
+    }
+
+    @Test
+    fun nonPositiveGammaWheelIsRejectedBeforeShaderExecution() {
+        val invalid = stack(VideoAdjustmentParams.default().copy(gamma = Vector3(0f, 1f, 1f)))
+
+        assertTrue(
+            Media3ClipAdjustmentSupport.validationErrors(invalid)
+                .any { it.contains("gamma") && it.contains("supported ranges") }
         )
     }
 
     @Test
     fun defaultOrDisabledAdjustmentsDoNotRequireRendering() {
         val defaults = stack()
-        assertTrue(Media3ClipAdjustmentSupport.validationErrors(defaults, nativeEngineAvailable = false).isEmpty())
+        assertTrue(Media3ClipAdjustmentSupport.validationErrors(defaults).isEmpty())
         assertFalse(Media3ClipAdjustmentSupport.hasRenderableAdjustments(defaults))
 
         val disabled = stack(VideoAdjustmentParams.default().copy(grainAmount = 0.5f)).copy(enabled = false)
-        assertTrue(Media3ClipAdjustmentSupport.validationErrors(disabled, nativeEngineAvailable = false).isEmpty())
+        assertTrue(Media3ClipAdjustmentSupport.validationErrors(disabled).isEmpty())
         assertFalse(Media3ClipAdjustmentSupport.hasRenderableAdjustments(disabled))
     }
 
     @Test
     fun unsupportedOrAnimatedAdjustmentsAreRejectedInsteadOfDropped() {
         val withGrain = stack(VideoAdjustmentParams.default().copy(grainAmount = 0.25f))
-        val grainErrors = Media3ClipAdjustmentSupport.validationErrors(withGrain, nativeEngineAvailable = true)
+        val grainErrors = Media3ClipAdjustmentSupport.validationErrors(withGrain)
         assertTrue(grainErrors.any { it.contains("film grain") })
 
         val animated = stack(VideoAdjustmentParams.default().copy(contrast = 0.2f)).copy(
@@ -64,7 +73,7 @@ class Media3ClipAdjustmentSupportTest {
             )
         )
         assertTrue(
-            Media3ClipAdjustmentSupport.validationErrors(animated, nativeEngineAvailable = true)
+            Media3ClipAdjustmentSupport.validationErrors(animated)
                 .any { it.contains("Animated clip adjustments") }
         )
     }
@@ -85,17 +94,17 @@ class Media3ClipAdjustmentSupportTest {
             qualHueShift = 0.4f
         )
 
-        assertTrue(Media3ClipAdjustmentSupport.validationErrors(stack(params), nativeEngineAvailable = true).isEmpty())
+        assertTrue(Media3ClipAdjustmentSupport.validationErrors(stack(params)).isEmpty())
         assertTrue(Media3ClipAdjustmentSupport.hasRenderableAdjustments(params))
     }
 
     @Test
-    fun activeSelectiveHslAndEnabledQualifierRemainRejected() {
+    fun activeSelectiveHslAndEnabledQualifierRemainRejectedUntilValidatedForExport() {
         val selectiveHsl = VideoAdjustmentParams.default().copy(
             hslHue = FloatArray(8).also { it[2] = 0.15f }
         )
         assertTrue(
-            Media3ClipAdjustmentSupport.validationErrors(stack(selectiveHsl), nativeEngineAvailable = true)
+            Media3ClipAdjustmentSupport.validationErrors(stack(selectiveHsl))
                 .any { it.contains("selective HSL bands") }
         )
 
@@ -104,22 +113,19 @@ class Media3ClipAdjustmentSupportTest {
             qualHueShift = 0.2f
         )
         assertTrue(
-            Media3ClipAdjustmentSupport.validationErrors(stack(qualifier), nativeEngineAvailable = true)
+            Media3ClipAdjustmentSupport.validationErrors(stack(qualifier))
                 .any { it.contains("HSL qualifier") }
         )
     }
 
     @Test
-    fun activeAdjustmentRequiresTheNativeProcessorAndValidRanges() {
+    fun gpuSupportedAdjustmentsDoNotRequireNativeCppButRangesAreStillValidated() {
         val contrast = stack(VideoAdjustmentParams.default().copy(contrast = 0.2f))
-        assertTrue(
-            Media3ClipAdjustmentSupport.validationErrors(contrast, nativeEngineAvailable = false)
-                .any { it.contains("native color-adjustment engine is unavailable") }
-        )
+        assertTrue(Media3ClipAdjustmentSupport.validationErrors(contrast).isEmpty())
 
         val invalid = stack(VideoAdjustmentParams.default().copy(contrast = 1.5f))
         assertTrue(
-            Media3ClipAdjustmentSupport.validationErrors(invalid, nativeEngineAvailable = true)
+            Media3ClipAdjustmentSupport.validationErrors(invalid)
                 .any { it.contains("outside their supported ranges") }
         )
     }

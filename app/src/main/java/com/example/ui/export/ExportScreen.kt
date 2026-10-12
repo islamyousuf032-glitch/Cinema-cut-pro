@@ -18,6 +18,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.timeline.core.TimelineProject
 import com.example.timeline.export.BatchExportManager
+import com.example.timeline.export.validation.TimelineExportAutoFixer
 import com.example.timeline.export.service.ExportState
 import java.io.File
 import java.text.SimpleDateFormat
@@ -25,15 +26,16 @@ import java.util.Date
 import java.util.Locale
 import java.util.UUID
 
-private fun createAppScopedExportFile(context: android.content.Context, extension: String): File {
-    val directory = context.getExternalFilesDir(Environment.DIRECTORY_MOVIES)
+private fun createStagingExportFile(context: android.content.Context, extension: String): File {
+    val moviesDirectory = context.getExternalFilesDir(Environment.DIRECTORY_MOVIES)
         ?: File(context.filesDir, Environment.DIRECTORY_MOVIES)
-    if (!directory.exists() && !directory.mkdirs()) {
-        throw IllegalStateException("Unable to create the app's Movies export directory.")
+    val stagingDirectory = File(moviesDirectory, ".cinema_cut_pro_staging")
+    if (!stagingDirectory.exists() && !stagingDirectory.mkdirs()) {
+        throw IllegalStateException("Unable to create the temporary export directory.")
     }
     val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US).format(Date())
     val suffix = UUID.randomUUID().toString().take(8)
-    return File(directory, "ChromaPro_Export_${timestamp}_${suffix}.$extension")
+    return File(stagingDirectory, "CinemaCutPro_Export_${timestamp}_${suffix}.$extension")
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -42,6 +44,7 @@ fun ExportScreen(
     project: TimelineProject,
     onDismiss: () -> Unit,
     onExportLut: (Int) -> Unit = {},
+    onFixTimeline: () -> Boolean = { false },
     viewModel: ExportSettingsViewModel = viewModel()
 ) {
     val context = LocalContext.current
@@ -54,8 +57,8 @@ fun ExportScreen(
         properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
     ) {
         Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-            LaunchedEffect(project.id) {
-                viewModel.initProject(project)
+            LaunchedEffect(project) {
+                viewModel.syncProject(project)
             }
 
             if (exportState is ExportState.Exporting || exportState is ExportState.Completed || exportState is ExportState.Error) {
@@ -68,12 +71,11 @@ fun ExportScreen(
                 val settings = uiState.currentSettings
                 if (settings != null) {
                     var showValidationDetails by remember { mutableStateOf(false) }
-                    val validationDetails = buildString {
-                        uiState.validationResult.errorMessage?.takeIf { !uiState.validationResult.isValid }
-                            ?.let { appendLine(it) }
-                        uiState.validationResult.unsupportedFeatures.forEach { appendLine("• $it") }
-                        uiState.validationResult.warnings.forEach { appendLine("• $it") }
-                    }.trim().ifEmpty { "No additional validation details." }
+                    val validationDetails = uiState.validationResult.formatDetails()
+                    val autoFixAvailable = remember(project, uiState.validationResult) {
+                        uiState.validationResult.hasAutoFixableTimelineLayoutError() &&
+                            TimelineExportAutoFixer.compactVisibleVideoTrack(project) != null
+                    }
 
                     Scaffold(
                         topBar = {
@@ -97,14 +99,27 @@ fun ExportScreen(
                                             modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
                                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                                         ) {
-                                            Text(
-                                                "Cannot Export: ${uiState.validationResult.errorMessage ?: "Configuration error"}",
-                                                color = MaterialTheme.colorScheme.error,
-                                                style = MaterialTheme.typography.bodySmall,
-                                                maxLines = 2,
-                                                overflow = TextOverflow.Ellipsis,
-                                                modifier = Modifier.weight(1f)
-                                            )
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(
+                                                    "Cannot Export: ${uiState.validationResult.errorMessage ?: "Configuration error"}",
+                                                    color = MaterialTheme.colorScheme.error,
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    maxLines = 2,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                                if (uiState.validationResult.warnings.isNotEmpty()) {
+                                                    Text(
+                                                        "${uiState.validationResult.warnings.size} non-blocking warning(s)",
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                        style = MaterialTheme.typography.labelSmall
+                                                    )
+                                                }
+                                            }
+                                            if (autoFixAvailable) {
+                                                TextButton(onClick = { onFixTimeline() }) {
+                                                    Text("Fix automatically")
+                                                }
+                                            }
                                             TextButton(onClick = { showValidationDetails = true }) {
                                                 Text("Details")
                                             }
@@ -128,19 +143,21 @@ fun ExportScreen(
                                         }
                                     }
                                     
-                                    if (compactHeight) {
-                                        Text(
-                                            "Est. size ~${uiState.estimatedSizeMb.toInt()} MB  •  time ~${uiState.estimatedRenderTimeSec}s",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            modifier = Modifier.padding(bottom = 4.dp)
-                                        )
-                                    } else {
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
-                                            horizontalArrangement = Arrangement.SpaceBetween
-                                        ) {
-                                            Text("Est. Size: ~${uiState.estimatedSizeMb.toInt()} MB", style = MaterialTheme.typography.bodySmall)
-                                            Text("Est. Time: ~${uiState.estimatedRenderTimeSec}s", style = MaterialTheme.typography.bodySmall)
+                                    if (uiState.validationResult.isValid) {
+                                        if (compactHeight) {
+                                            Text(
+                                                "Est. size ~${uiState.estimatedSizeMb.toInt()} MB  •  time ~${uiState.estimatedRenderTimeSec}s",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                modifier = Modifier.padding(bottom = 4.dp)
+                                            )
+                                        } else {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                                                horizontalArrangement = Arrangement.SpaceBetween
+                                            ) {
+                                                Text("Est. Size: ~${uiState.estimatedSizeMb.toInt()} MB", style = MaterialTheme.typography.bodySmall)
+                                                Text("Est. Time: ~${uiState.estimatedRenderTimeSec}s", style = MaterialTheme.typography.bodySmall)
+                                            }
                                         }
                                     }
 
@@ -156,7 +173,7 @@ fun ExportScreen(
                                     ) {
                                         OutlinedButton(
                                             onClick = {
-                                                val outFile = createAppScopedExportFile(context, settings.container.name.lowercase())
+                                                val outFile = createStagingExportFile(context, settings.container.name.lowercase())
                                                 BatchExportManager.enqueueExport(project, settings, outFile)
                                             },
                                             modifier = Modifier.weight(1f).height(if (compactHeight) 48.dp else 56.dp),
@@ -170,7 +187,7 @@ fun ExportScreen(
                                                 if (queueState.isNotEmpty()) {
                                                     BatchExportManager.startQueuedExports(context)
                                                 } else {
-                                                    val outFile = createAppScopedExportFile(context, settings.container.name.lowercase())
+                                                    val outFile = createStagingExportFile(context, settings.container.name.lowercase())
                                                     BatchExportManager.startExport(context, project, settings, outFile)
                                                 }
                                             },

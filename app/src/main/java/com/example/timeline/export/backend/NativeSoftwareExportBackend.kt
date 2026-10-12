@@ -43,7 +43,7 @@ class NativeSoftwareExportBackend : ExportBackend {
     override suspend fun prepare(job: ExportJob): Boolean {
         if (NativeExportCore.isAvailable()) {
             NativeExportCore.nativeCreateExportCore()
-            Log.i("NativeSoftwareExport", "Preparing: created export core.")
+            if (com.example.BuildConfig.DEBUG) Log.d("NativeSoftwareExport", "Preparing: created export core.")
             return true
         }
         return false
@@ -51,7 +51,7 @@ class NativeSoftwareExportBackend : ExportBackend {
 
     override suspend fun render(job: ExportJob, onProgress: (ExportProgress) -> Unit) {
         if (NativeExportCore.isAvailable()) {
-            Log.i("NativeSoftwareExport", "Rendering with native core...")
+            if (com.example.BuildConfig.DEBUG) Log.d("NativeSoftwareExport", "Rendering with native core...")
             NativeExportCore.nativeEvaluateFramePlan(0L)
             // Simulating progress
             onProgress(ExportProgress(job.jobId, ExportJobStatus.COMPLETED, 100f, 1, 1, 0, 0, "Completed Native Software Render"))
@@ -65,7 +65,7 @@ class NativeSoftwareExportBackend : ExportBackend {
     override fun release() {
         if (NativeExportCore.isAvailable()) {
              NativeExportCore.nativeReleaseExportCore()
-             Log.i("NativeSoftwareExport", "Released export core.")
+             if (com.example.BuildConfig.DEBUG) Log.d("NativeSoftwareExport", "Released export core.")
         }
     }
 }

@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.timeline.core.*
 import com.example.timeline.core.transform.ClipTransform
+import com.example.timeline.export.validation.TimelineExportAutoFixer
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -25,7 +26,13 @@ import com.example.timeline.media.PreviewStatus
 import com.example.timeline.media.ProxyStatus
 import com.example.timeline.media.MediaErrorStatus
 import com.example.timeline.media.ProxyInfo
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class TimelineViewModel(context: Context) : ViewModel() {
     private val historyManager = TimelineHistoryManager()
@@ -39,6 +46,8 @@ class TimelineViewModel(context: Context) : ViewModel() {
     private val _proxyProgress = MutableStateFlow<Map<String, Float>>(emptyMap())
     val proxyProgress: StateFlow<Map<String, Float>> = _proxyProgress.asStateFlow()
     private val activeProxyJobs = mutableMapOf<String, UUID>()
+    private val automaticProxyRequests = mutableSetOf<String>()
+    private val cadenceReanalysisJobs = mutableMapOf<String, Job>()
     private val autosaveManager = AutosaveManager(
         scope = viewModelScope,
         versionManager = versionManager,
@@ -108,6 +117,7 @@ class TimelineViewModel(context: Context) : ViewModel() {
 
     fun loadProject(project: TimelineProject) {
         historyManager.clear()
+        _playheadFrame.value = 0L
         _uiState.update { 
             it.copy(
                 project = project,
@@ -118,11 +128,58 @@ class TimelineViewModel(context: Context) : ViewModel() {
             )
         }
         autosaveManager.markDirty(project)
+        reanalyzeUnverifiedVideoCadence(project)
+    }
+
+    /** Re-probes legacy projects whose schema predates the persisted timestamp-cadence result. */
+    private fun reanalyzeUnverifiedVideoCadence(project: TimelineProject) {
+        project.mediaAssets
+            .filter { it.metadata.hasVideo && !it.metadata.variableFrameRateDetectionComplete }
+            .forEach { asset ->
+                val key = "${project.id}:${asset.assetId}"
+                if (cadenceReanalysisJobs[key]?.isActive == true) return@forEach
+                val sourceUriString = asset.localOriginalUriString?.takeIf { it.isNotBlank() }
+                    ?: asset.originalUriString.takeIf { it.isNotBlank() }
+                    ?: return@forEach
+                val sourceUri = runCatching { Uri.parse(sourceUriString) }.getOrNull() ?: return@forEach
+
+                cadenceReanalysisJobs[key] = viewModelScope.launch(Dispatchers.IO) {
+                    try {
+                        val analyzedAsset = mediaAnalyzer.analyze(asset, sourceUri)
+                        if (analyzedAsset.metadata.variableFrameRateDetectionComplete) {
+                            withContext(Dispatchers.Main.immediate) {
+                                val currentProject = _uiState.value.project
+                                if (currentProject.id != project.id) return@withContext
+                                val updatedAssets = currentProject.mediaAssets.map { current ->
+                                    if (current.assetId == asset.assetId) current.copy(
+                                        metadata = current.metadata.copy(
+                                            isVariableFrameRate = analyzedAsset.metadata.isVariableFrameRate,
+                                            variableFrameRateDetectionComplete = true,
+                                            estimatedFrameRate = analyzedAsset.metadata.estimatedFrameRate
+                                        )
+                                    ) else current
+                                }
+                                updateState(
+                                    currentProject.copy(mediaAssets = updatedAssets),
+                                    markDirty = false
+                                )
+                            }
+                        }
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (error: Exception) {
+                        if (com.example.BuildConfig.DEBUG) error.printStackTrace()
+                    } finally {
+                        withContext(NonCancellable + Dispatchers.Main.immediate) {
+                            cadenceReanalysisJobs.remove(key)
+                        }
+                    }
+                }
+            }
     }
 
     fun handlePickedUris(uris: List<Uri>) {
         uris.forEach { uri -> 
-            android.util.Log.d("MEDIA_IMPORT", "uri received: $uri")
             enqueueMediaAnalysis(uri) 
         }
     }
@@ -131,7 +188,6 @@ class TimelineViewModel(context: Context) : ViewModel() {
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             try {
                 val hasPermission = com.example.timeline.media.ImportPermissionManager.persistPermission(contextRef, uri)
-                android.util.Log.d("MEDIA_IMPORT", "permission persisted: $hasPermission")
                 val projectId = _uiState.value.project.id
                 var initialAsset = com.example.timeline.media.DocumentMediaReader.createAnalyzingAsset(contextRef, uri, projectId)?.copy(
                     persistedUriPermission = hasPermission,
@@ -139,7 +195,6 @@ class TimelineViewModel(context: Context) : ViewModel() {
                 )
                 
                 if (initialAsset != null) {
-                    android.util.Log.d("MEDIA_IMPORT", "media asset created: ${initialAsset.assetId}")
                     val currentProject = _uiState.value.project
                     
                     val isVideo = initialAsset.mimeType.startsWith("video/")
@@ -167,19 +222,16 @@ class TimelineViewModel(context: Context) : ViewModel() {
 
                         val uriToAnalyze = if (localPath != null) Uri.parse(localPath) else uri
                         val finalAsset = mediaAnalyzer.analyze(initialAsset, uriToAnalyze)
-                        android.util.Log.d("MEDIA_IMPORT", "metadata analyzed: ${finalAsset.previewStatus}")
                         val stateNow = _uiState.value
                         
                         val updatedList = stateNow.project.mediaAssets.map { if (it.assetId == finalAsset.assetId) finalAsset else it }
                         val pFinal = stateNow.project.copy(mediaAssets = updatedList)
-                        android.util.Log.d("MEDIA_IMPORT", "asset added to state: ${finalAsset.assetId}")
                         
                         val cmd = SnapshotCommand("Import Media", currentProject, pFinal, emptyList())
                         historyManager.pushCommand(cmd)
                         updateState(pFinal)
                         
                         if (finalAsset.mediaErrorStatus == MediaErrorStatus.NONE && finalAsset.mediaAvailabilityStatus != com.example.timeline.media.MediaAvailabilityStatus.MISSING_NEEDS_RELINK) {
-                            android.util.Log.d("MEDIA_IMPORT", "calling addMediaAssetToTimeline for ${finalAsset.displayName}")
                             addClipFromMedia(finalAsset)
                         }
                         
@@ -189,7 +241,7 @@ class TimelineViewModel(context: Context) : ViewModel() {
                     }
                 }
             } catch (e: Exception) {
-                e.printStackTrace()
+                if (com.example.BuildConfig.DEBUG) e.printStackTrace()
             }
         }
     }
@@ -215,7 +267,7 @@ class TimelineViewModel(context: Context) : ViewModel() {
                 }
                 "file://${outputFile.absolutePath}"
             } catch (e: Exception) {
-                e.printStackTrace()
+                if (com.example.BuildConfig.DEBUG) e.printStackTrace()
                 null
             }
         }
@@ -242,51 +294,77 @@ class TimelineViewModel(context: Context) : ViewModel() {
     fun generateProxyForAsset(asset: MediaAsset) {
         val workId = importWorkManager.startProxyJob(asset)
         activeProxyJobs[asset.assetId] = workId
-        
+        _proxyProgress.value = _proxyProgress.value.toMutableMap().apply { this[asset.assetId] = 0f }
+
         viewModelScope.launch {
             workManager.getWorkInfoByIdFlow(workId).collect { workInfo ->
-                if (workInfo != null) {
-                    val progress = workInfo.progress.getInt(ProxyGenerationWorker.KEY_PROGRESS, 0)
-                    _proxyProgress.value = _proxyProgress.value.toMutableMap().apply {
-                        this[asset.assetId] = progress / 100f
-                    }
-                    
-                    if (workInfo.state == WorkInfo.State.SUCCEEDED) {
+                if (workInfo == null) return@collect
+
+                val progress = workInfo.progress.getInt(ProxyGenerationWorker.KEY_PROGRESS, 0)
+                _proxyProgress.value = _proxyProgress.value.toMutableMap().apply {
+                    this[asset.assetId] = progress.coerceIn(0, 100) / 100f
+                }
+
+                val stateNow = _uiState.value
+                when (workInfo.state) {
+                    WorkInfo.State.SUCCEEDED -> {
                         val outputUri = workInfo.outputData.getString(ProxyGenerationWorker.KEY_OUTPUT_URI)
-                        if (outputUri != null) {
-                            val stateNow = _uiState.value
-                            val updatedAssets = stateNow.project.mediaAssets.map { m ->
-                                if (m.assetId == asset.assetId) {
-                                    val (proxyWidth, proxyHeight) = proxyDimensions(m.metadata.width, m.metadata.height)
-                                    m.copy(
-                                        proxyStatus = ProxyStatus.READY,
-                                        proxyInfo = ProxyInfo(
-                                            uriString = outputUri,
-                                            width = proxyWidth,
-                                            height = proxyHeight,
-                                            frameRate = m.metadata.estimatedFrameRate?.fpsAsFloat ?: 30f,
-                                            isProxyGenerated = true,
-                                            proxyFormat = "mp4",
-                                            proxyMimeType = "video/avc"
-                                        )
+                        val updatedAssets = stateNow.project.mediaAssets.map { current ->
+                            if (current.assetId != asset.assetId) current
+                            else if (outputUri == null) current.copy(
+                                proxyStatus = ProxyStatus.FAILED,
+                                errorMessage = "Proxy worker completed without an output file."
+                            ) else {
+                                val (proxyWidth, proxyHeight) = proxyDimensions(current.metadata.width, current.metadata.height)
+                                current.copy(
+                                    proxyStatus = ProxyStatus.READY,
+                                    errorMessage = null,
+                                    proxyInfo = ProxyInfo(
+                                        uriString = outputUri,
+                                        width = proxyWidth,
+                                        height = proxyHeight,
+                                        frameRate = current.metadata.estimatedFrameRate?.fpsAsFloat ?: 30f,
+                                        isProxyGenerated = true,
+                                        proxyFormat = "mp4",
+                                        proxyMimeType = "video/avc"
                                     )
-                                } else m
-                            }
-                            updateState(stateNow.project.copy(mediaAssets = updatedAssets))
-                        }
-                    } else if (workInfo.state == WorkInfo.State.FAILED || workInfo.state == WorkInfo.State.CANCELLED) {
-                        val errorMsg = workInfo.outputData.getString(ProxyGenerationWorker.KEY_ERROR_MSG) ?: workInfo.progress.getString(ProxyGenerationWorker.KEY_ERROR_MSG) ?: "Proxy generation failed."
-                        val stateNow = _uiState.value
-                        val updatedAssets = stateNow.project.mediaAssets.map { m ->
-                            if (m.assetId == asset.assetId) {
-                                m.copy(
-                                    proxyStatus = ProxyStatus.FAILED,
-                                    errorMessage = errorMsg
                                 )
-                            } else m
+                            }
                         }
                         updateState(stateNow.project.copy(mediaAssets = updatedAssets))
                     }
+                    WorkInfo.State.FAILED -> {
+                        val errorMsg = workInfo.outputData.getString(ProxyGenerationWorker.KEY_ERROR_MSG)
+                            ?: workInfo.progress.getString(ProxyGenerationWorker.KEY_ERROR_MSG)
+                            ?: "Proxy generation failed."
+                        val updatedAssets = stateNow.project.mediaAssets.map { current ->
+                            if (current.assetId == asset.assetId) current.copy(
+                                proxyStatus = ProxyStatus.FAILED,
+                                errorMessage = errorMsg
+                            ) else current
+                        }
+                        updateState(stateNow.project.copy(mediaAssets = updatedAssets))
+                    }
+                    WorkInfo.State.CANCELLED -> {
+                        val restoreStatus = asset.proxyStatus.takeUnless { it == ProxyStatus.GENERATING } ?: ProxyStatus.NONE
+                        val updatedAssets = stateNow.project.mediaAssets.map { current ->
+                            if (current.assetId == asset.assetId) current.copy(
+                                proxyStatus = restoreStatus,
+                                errorMessage = asset.errorMessage
+                            ) else current
+                        }
+                        updateState(stateNow.project.copy(mediaAssets = updatedAssets))
+                    }
+                    else -> Unit
+                }
+
+                if (workInfo.state == WorkInfo.State.SUCCEEDED ||
+                    workInfo.state == WorkInfo.State.FAILED ||
+                    workInfo.state == WorkInfo.State.CANCELLED
+                ) {
+                    if (activeProxyJobs[asset.assetId] == workId) activeProxyJobs.remove(asset.assetId)
+                    _proxyProgress.value = _proxyProgress.value - asset.assetId
+                    kotlinx.coroutines.currentCoroutineContext().cancel()
                 }
             }
         }
@@ -354,6 +432,12 @@ class TimelineViewModel(context: Context) : ViewModel() {
         }
     }
     
+    /** Auto-proxy requests are one-shot so cancelling a recommendation does not restart it. */
+    fun generateRecommendedProxy(assetId: String) {
+        val projectId = _uiState.value.project.id
+        if (automaticProxyRequests.add("$projectId:$assetId")) generateProxy(assetId)
+    }
+
     fun generateProxy(assetId: String) {
         val asset = _uiState.value.project.mediaAssets.find { it.assetId == assetId } ?: return
         if (asset.proxyStatus == ProxyStatus.READY || asset.proxyStatus == ProxyStatus.GENERATING) return
@@ -403,7 +487,6 @@ class TimelineViewModel(context: Context) : ViewModel() {
             }
         }
 
-        android.util.Log.d("ADD_TO_TIMELINE", "clip created clipId=${newClip.id} assetId=${newClip.mediaId} trackId=${newClip.trackId}")
         val cmd = SnapshotCommand("Add Clip", state.project, finalProject, listOf(newClip.id))
         historyManager.pushCommand(cmd)
         
@@ -489,6 +572,31 @@ class TimelineViewModel(context: Context) : ViewModel() {
             historyManager.pushCommand(command)
             updateState(result.project)
         }
+    }
+
+    /** Applies the safe, export-specific timeline repair as one undoable history entry. */
+    fun fixTimelineForExport(): Boolean {
+        val projectBefore = _uiState.value.project
+        val projectAfter = TimelineExportAutoFixer.compactVisibleVideoTrack(projectBefore) ?: return false
+        val movedClipIds = projectBefore.tracks
+            .flatMap { it.clips }
+            .filter { clip ->
+                val repaired = projectAfter.tracks.asSequence().flatMap { it.clips.asSequence() }
+                    .firstOrNull { it.id == clip.id }
+                repaired != null && repaired.timelineStart != clip.timelineStart
+            }
+            .map { it.id }
+        val command = SnapshotCommand(
+            commandName = "Fix Timeline for Export",
+            projectBefore = projectBefore,
+            projectAfter = projectAfter,
+            affectedClipIds = movedClipIds
+        )
+        val result = command.execute(projectBefore)
+        if (!result.isSuccess) return false
+        historyManager.pushCommand(command)
+        updateState(result.project)
+        return true
     }
 
     fun zoomIn() {
@@ -597,15 +705,21 @@ class TimelineViewModel(context: Context) : ViewModel() {
     }
 
     fun moveSelectedClip(newStartFrame: Long) {
+        val clipId = _uiState.value.selectedClipId ?: return
+        moveClip(clipId, newStartFrame)
+    }
+
+    fun moveClip(clipId: String, newStartFrame: Long) {
         val state = _uiState.value
-        val clipId = state.selectedClipId ?: return
-        
         val clipAndTrack = findClipAndTrack(state.project, clipId) ?: return
-        val newClip = clipAndTrack.second.copy(timelineStart = newStartFrame)
-        
+        if (clipAndTrack.first.isLocked) return
+        val boundedStartFrame = newStartFrame.coerceAtLeast(0L)
+        if (clipAndTrack.second.timelineStart == boundedStartFrame) return
+
+        val newClip = clipAndTrack.second.copy(timelineStart = boundedStartFrame)
         val p1 = CoreEditEngine.deleteClips(state.project, listOf(clipId)).project
         val p2 = CoreTimelineEngine.addClip(p1, clipAndTrack.first.id, newClip).project
-        
+
         val cmd = SnapshotCommand("Move Clip", state.project, p2, listOf(clipId))
         historyManager.pushCommand(cmd)
         updateState(p2)
@@ -738,6 +852,7 @@ class TimelineViewModel(context: Context) : ViewModel() {
     }
 
     fun createNewProject(settings: com.example.timeline.core.ProjectSettings) {
+        _playheadFrame.value = 0L
         val newProject = TimelineProject(
             id = java.util.UUID.randomUUID().toString(),
             settings = settings,

@@ -35,7 +35,7 @@ class ExportDecodeSource(
                 }
             }
         } catch (e: Exception) {
-            e.printStackTrace()
+            if (com.example.BuildConfig.DEBUG) e.printStackTrace()
         }
         return false
     }

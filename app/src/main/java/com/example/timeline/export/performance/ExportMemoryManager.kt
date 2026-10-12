@@ -1,10 +1,8 @@
 package com.example.timeline.export.performance
 
-import android.util.Log
 import java.nio.ByteBuffer
 
 object ExportMemoryManager {
-    private const val TAG = "ExportMemoryManager"
     
     // We can keep a pool of ByteBuffers to avoid allocation overhead during export
     private val bufferPool = mutableListOf<ByteBuffer>()
@@ -23,7 +21,6 @@ object ExportMemoryManager {
         }
         
         // If not found in pool, allocate new
-        Log.d(TAG, "Allocating new ByteBuffer, capacity: \$capacity")
         return ByteBuffer.allocateDirect(capacity)
     }
     

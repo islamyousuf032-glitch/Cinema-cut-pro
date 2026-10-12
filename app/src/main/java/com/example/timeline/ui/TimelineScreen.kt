@@ -78,9 +78,9 @@ fun TimelineScreen(viewModel: TimelineViewModel, editorViewModel: com.example.ui
                     viewModel.setPlayheadFrame(it)
                     editorViewModel.updatePlayheadFrame(it) 
                 },
-                onClipMoved = { clipId, frame -> viewModel.moveSelectedClip(frame) },
-                onTrimStart = { clipId, frame -> viewModel.trimSelectedClipStart(frame) },
-                onTrimEnd = { clipId, frame -> viewModel.trimSelectedClipEnd(frame) },
+                onClipMoved = { clipId, frame -> viewModel.moveClip(clipId, frame) },
+                onTrimStart = { clipId, frame -> viewModel.trimClipStart(clipId, frame) },
+                onTrimEnd = { clipId, frame -> viewModel.trimClipEnd(clipId, frame) },
                 onZoomChange = { viewModel.setZoom(it) },
                 onSplit = { viewModel.splitAtPlayhead() },
                 onDelete = { viewModel.deleteSelectedClip(ripple = false) },

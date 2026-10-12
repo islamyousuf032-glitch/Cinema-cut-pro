@@ -18,6 +18,7 @@ class SnapController {
         val thresholdFrames = (thresholdPx / pixelsPerFrame).toLong().coerceAtLeast(1)
 
         val snapTargets = mutableListOf<Long>()
+        snapTargets.add(0L)
         snapTargets.add(playheadFrame)
 
         project.tracks.forEach { track ->
