@@ -10,8 +10,8 @@ import kotlinx.coroutines.withContext
 
 class AndroidMediaAnalyzer(
     private val context: Context,
-    private val capabilityDetector: CodecCapabilityDetector = CodecCapabilityDetector(),
-    private val decisionEngine: MediaImportDecisionEngine = MediaImportDecisionEngine(capabilityDetector)
+    private val capabilityDetector: VideoDecoderCapabilitySource = CodecCapabilityDetector(),
+    private val decisionEngine: MediaImportDecisionEngine = MediaImportDecisionEngine()
 ) : MediaAnalyzer {
 
     override suspend fun analyze(asset: MediaAsset, uri: Uri): MediaAsset = withContext(Dispatchers.IO) {
@@ -63,13 +63,23 @@ class AndroidMediaAnalyzer(
                     val colorStandard = if (format.containsKey(MediaFormat.KEY_COLOR_STANDARD)) format.getInteger(MediaFormat.KEY_COLOR_STANDARD) else null
                     val colorTransfer = if (format.containsKey(MediaFormat.KEY_COLOR_TRANSFER)) format.getInteger(MediaFormat.KEY_COLOR_TRANSFER) else null
                     val isHdr = colorTransfer == MediaFormat.COLOR_TRANSFER_HLG || colorTransfer == MediaFormat.COLOR_TRANSFER_ST2084
+                    val codecProfile = if (format.containsKey(MediaFormat.KEY_PROFILE)) format.getIntegerSafely(MediaFormat.KEY_PROFILE, 0) else null
+                    val codecLevel = if (format.containsKey(MediaFormat.KEY_LEVEL)) format.getIntegerSafely(MediaFormat.KEY_LEVEL, 0) else null
+                    val decoderSupport = capabilityDetector.decoderSupportForFormat(
+                        trackMime,
+                        width,
+                        height,
+                        frameRateVal,
+                        codecProfile,
+                        codecLevel
+                    )
 
                     videoStreams.add(
                         VideoStreamInfo(
                             codecName = trackMime.replace("video/", ""),
                             codecMime = trackMime,
-                            codecProfile = if(format.containsKey(MediaFormat.KEY_PROFILE)) format.getIntegerSafely(MediaFormat.KEY_PROFILE, 0) else null,
-                            codecLevel = if(format.containsKey(MediaFormat.KEY_LEVEL)) format.getIntegerSafely(MediaFormat.KEY_LEVEL, 0) else null,
+                            codecProfile = codecProfile,
+                            codecLevel = codecLevel,
                             width = width,
                             height = height,
                             frameRate = FrameRate((frameRateVal * 1000).toInt(), 1000),
@@ -81,10 +91,11 @@ class AndroidMediaAnalyzer(
                             isHdr = isHdr,
                             isLog = false,
                             detectedLogProfile = null,
-                            hardwareDecodeSupported = true,
-                            softwareDecodeSupported = true,
-                            requiresProxy = false, // Engine decides
-                            requiresTranscode = false
+                            hardwareDecodeSupported = decoderSupport.hardware,
+                            softwareDecodeSupported = decoderSupport.software,
+                            requiresProxy = decoderSupport.available && !decoderSupport.hardware,
+                            requiresTranscode = !decoderSupport.available,
+                            decoderSupportUnknown = decoderSupport.unknown
                         )
                     )
                     defaultMimeType = trackMime

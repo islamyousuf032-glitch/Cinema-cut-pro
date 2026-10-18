@@ -6,22 +6,18 @@ data class MediaStatusResult(
     val report: ImportTechnicalReport
 )
 
-class MediaImportDecisionEngine(private val capabilityDetector: CodecCapabilityDetector) {
+class MediaImportDecisionEngine {
     fun decideImportStatus(result: MediaAnalysisResult): MediaStatusResult {
         val mimeType = result.defaultMimeType
         var directPlaybackSupport = false
         var proxyRecommendation = false
         var transcodeRecommendation = false
-        var pluginRequired = false
-        
         var previewStatus = PreviewStatus.DIRECT_SUPPORTED_PROBABLE
         var proxyStatus = ProxyStatus.NONE
-        
         val warnings = mutableListOf<String>()
         var userMessage = "Media is ready."
 
         if (mimeType.startsWith("audio/") || mimeType.startsWith("image/")) {
-            directPlaybackSupport = true
             return MediaStatusResult(
                 previewStatus = PreviewStatus.DIRECT_SUPPORTED_PROBABLE,
                 proxyStatus = ProxyStatus.NONE,
@@ -37,9 +33,8 @@ class MediaImportDecisionEngine(private val capabilityDetector: CodecCapabilityD
         }
 
         if (mimeType.contains("raw") || mimeType.contains("braw") || mimeType.contains("r3d") || mimeType.contains("arriraw")) {
-            pluginRequired = true
             previewStatus = PreviewStatus.UNSUPPORTED
-            proxyStatus = ProxyStatus.REQUIRED // Proxy is only way to preview
+            proxyStatus = ProxyStatus.REQUIRED
             userMessage = "A manufacturer plugin is required to decode this RAW format."
         } else if (mimeType.contains("prores") || mimeType.contains("dnxhr") || mimeType.contains("mxf")) {
             transcodeRecommendation = true
@@ -47,43 +42,41 @@ class MediaImportDecisionEngine(private val capabilityDetector: CodecCapabilityD
             proxyStatus = ProxyStatus.REQUIRED
             userMessage = "This professional format requires transcoding for editing on this device."
         } else {
-            val isHevc = mimeType.contains("hevc") || mimeType.contains("h265")
-            val isAvc = mimeType.contains("avc") || mimeType.contains("h264")
-            val isAv1 = mimeType.contains("av01")
-            val isVp9 = mimeType.contains("vp9")
-
-            var hardwareSupported = false
-            for (videoStream in result.videoStreams) {
-                if (capabilityDetector.hasDecoderForFormat(
-                        videoStream.codecMime,
-                        videoStream.width,
-                        videoStream.height,
-                        result.frameRate,
-                        videoStream.codecProfile,
-                        videoStream.codecLevel
-                    )) {
-                    hardwareSupported = true
-                    break
-                }
+            val hardwareDecoderAvailable = result.videoStreams.any { it.hardwareDecodeSupported }
+            val anyDecoderAvailable = result.videoStreams.any {
+                it.hardwareDecodeSupported || it.softwareDecodeSupported || it.decoderSupportUnknown
             }
 
-            if (!hardwareSupported) {
+            if (!anyDecoderAvailable) {
                 transcodeRecommendation = true
                 previewStatus = PreviewStatus.UNSUPPORTED
                 proxyStatus = ProxyStatus.REQUIRED
-                userMessage = "Your device hardware does not support decoding this format. Transcoding required."
-                warnings.add("Hardware decoding not supported for $mimeType")
+                userMessage = "No compatible decoder was found for this video on the device. A proxy or supported transcode is required."
+                warnings.add("No compatible decoder was detected for $mimeType")
             } else {
                 directPlaybackSupport = true
-                val isHighRes = result.width >= 3840 || result.height >= 3840
-                val isHighFramerate = result.frameRate > 60
+                val isHevc = mimeType.contains("hevc") || mimeType.contains("h265")
+                val isHighWorkload = isHighDecodeWorkload(result)
                 val isHdr = result.videoStreams.any { it.isHdr }
+                val noConfirmedHardwareDecoder = !hardwareDecoderAvailable
 
-                if (isHighRes || isHighFramerate || (isHevc && isHdr)) {
+                if (noConfirmedHardwareDecoder || isHighWorkload || (isHevc && isHdr)) {
                     proxyRecommendation = true
                     proxyStatus = ProxyStatus.RECOMMENDED
-                    warnings.add("High resolution or HDR format detected. Proxies are recommended for smooth editing.")
-                    userMessage = "Proxies will be generated to ensure smooth playback during editing."
+                    if (noConfirmedHardwareDecoder) {
+                        warnings.add("A hardware decoder was not confirmed for $mimeType; direct playback may stutter and a proxy is recommended.")
+                    }
+                    if (isHighWorkload) {
+                        warnings.add("High decode workload detected (${result.width}×${result.height} at ${result.frameRate} fps); a proxy is recommended for smoother editing.")
+                    }
+                    if (isHevc && isHdr) {
+                        warnings.add("HDR HEVC media can be demanding for preview; a proxy is recommended for smoother editing.")
+                    }
+                    userMessage = if (noConfirmedHardwareDecoder) {
+                        "This video may play slowly on this device. A proxy is recommended for smoother editing."
+                    } else {
+                        "A proxy is recommended to keep editing responsive while preserving the original media."
+                    }
                 }
             }
         }
@@ -102,7 +95,17 @@ class MediaImportDecisionEngine(private val capabilityDetector: CodecCapabilityD
             warnings = warnings,
             userFriendlyMessage = userMessage
         )
-
         return MediaStatusResult(previewStatus, proxyStatus, report)
+    }
+
+    private fun isHighDecodeWorkload(result: MediaAnalysisResult): Boolean {
+        val width = result.width.coerceAtLeast(0)
+        val height = result.height.coerceAtLeast(0)
+        val frameRate = result.frameRate.takeIf { it.isFinite() && it > 0f } ?: 0f
+        val pixelsPerSecond = width.toDouble() * height.toDouble() * frameRate.toDouble()
+        val baseline1080p30 = 1920.0 * 1080.0 * 30.0
+        return maxOf(width, height) >= 2560 ||
+            frameRate > 60f ||
+            pixelsPerSecond > baseline1080p30 * 1.5
     }
 }

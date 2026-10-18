@@ -24,7 +24,8 @@ data class VideoStreamInfo(
     val hardwareDecodeSupported: Boolean,
     val softwareDecodeSupported: Boolean,
     val requiresProxy: Boolean,
-    val requiresTranscode: Boolean
+    val requiresTranscode: Boolean,
+    val decoderSupportUnknown: Boolean = false
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
@@ -36,6 +37,11 @@ data class VideoStreamInfo(
         if (codecMime != other.codecMime) return false
         if (width != other.width) return false
         if (height != other.height) return false
+        if (hardwareDecodeSupported != other.hardwareDecodeSupported) return false
+        if (softwareDecodeSupported != other.softwareDecodeSupported) return false
+        if (requiresProxy != other.requiresProxy) return false
+        if (requiresTranscode != other.requiresTranscode) return false
+        if (decoderSupportUnknown != other.decoderSupportUnknown) return false
 
         return true
     }
@@ -45,6 +51,11 @@ data class VideoStreamInfo(
         result = 31 * result + codecMime.hashCode()
         result = 31 * result + width
         result = 31 * result + height
+        result = 31 * result + hardwareDecodeSupported.hashCode()
+        result = 31 * result + softwareDecodeSupported.hashCode()
+        result = 31 * result + requiresProxy.hashCode()
+        result = 31 * result + requiresTranscode.hashCode()
+        result = 31 * result + decoderSupportUnknown.hashCode()
         return result
     }
 }
