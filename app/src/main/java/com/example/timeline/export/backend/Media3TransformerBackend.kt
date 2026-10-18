@@ -441,7 +441,7 @@ class Media3TransformerBackend(context: Context) : ExportBackend {
                 if (clip.timelineStart > expectedTimelineStart) {
                     errors += "Video gaps are not supported by Media3; use Fix automatically to close the gap."
                 } else if (clip.timelineStart < expectedTimelineStart) {
-                    errors += "Overlapping clips on the same video track are not supported by this export path."
+                    errors += "Overlapping clips, crossfades, and other NLE transitions are not supported; this export path is cut-only."
                 }
                 expectedTimelineStart = maxOf(expectedTimelineStart, clip.timelineEnd)
             }
@@ -580,7 +580,8 @@ class Media3TransformerBackend(context: Context) : ExportBackend {
             warnings += "One or more source frame rates are estimated from import metadata; verify they are constant-frame-rate."
         }
         if (activeAssets.size > 1) {
-            warnings += "Video clips are exported as a sequential Media3 composition after timeline gaps are closed."
+            warnings += "Video clips are exported as a sequential, cut-only Media3 composition after timeline gaps are closed."
+            warnings += "Crossfades and other NLE transitions are not implemented by this export path."
         }
         return warnings
     }

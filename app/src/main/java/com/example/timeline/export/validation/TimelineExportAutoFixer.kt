@@ -5,9 +5,9 @@ import com.example.timeline.core.TrackType
 
 /**
  * Builds an undoable export-oriented timeline repair by compacting enabled clips on the sole
- * visible video track. Media3 Transformer 1.5 cannot produce a video gap, so gaps and overlaps are
- * removed by shifting clips to consecutive frame positions. Original trims and all clip metadata
- * are preserved.
+ * visible video track. The bounded Media3 Transformer path is cut-only: it does not render gaps,
+ * overlaps, crossfades, or other NLE transitions. Gaps and overlaps are removed by shifting clips
+ * to consecutive frame positions. Original source trims and clip metadata are preserved.
  */
 object TimelineExportAutoFixer {
     fun compactVisibleVideoTrack(project: TimelineProject): TimelineProject? {
