@@ -5,6 +5,7 @@ import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.view.Surface
+import android.view.View
 import com.example.model.adjustments.VideoAdjustmentParams
 import com.example.timeline.engine.preview.PreviewEngine
 import com.example.timeline.engine.preview.PreviewEngineType
@@ -47,6 +48,9 @@ class NativeVlcPreviewEngine(
     private var mediaPlayer: MediaPlayer? = null
     
     private var currentUri: String? = null
+    private var pendingMediaStart = false
+    private var attachedLayout: org.videolan.libvlc.util.VLCVideoLayout? = null
+    private var layoutAttachListener: View.OnAttachStateChangeListener? = null
     private val mainHandler = Handler(Looper.getMainLooper())
     @Volatile private var loadGeneration = 0
     @Volatile private var pauseAfterFirstFrame = false
@@ -62,7 +66,8 @@ class NativeVlcPreviewEngine(
     init {
         try {
             val options = arrayListOf(
-                "--vout=android-display",
+                // Match VLC for Android 3.5.1's configured video-output module name.
+                "--vout=android_display,none",
                 "--avcodec-hw=any",
                 "--network-caching=500",
                 "--file-caching=250"
@@ -134,7 +139,7 @@ class NativeVlcPreviewEngine(
                 cancelFirstFrameWatchdog()
                 mediaPlayer?.let { player ->
                     if (player.isPlaying) player.pause()
-                    player.setVolume(100)
+                    player.setVolume(requestedVolumePercent)
                     // Warm-up is intentionally silent to the timeline. Restore the exact requested
                     // frame so a paused preview never lands a few decoded frames past the playhead.
                     if (player.time != initialPositionMs) player.time = initialPositionMs
@@ -157,7 +162,7 @@ class NativeVlcPreviewEngine(
                 cancelPauseAfterFirstFrame()
                 mediaPlayer?.let { player ->
                     if (player.isPlaying) player.pause()
-                    player.setVolume(100)
+                    player.setVolume(requestedVolumePercent)
                 }
                 _currentError.value = "LibVLC did not produce a video frame within 5 seconds"
                 _currentState.value = PreviewState.ERROR
@@ -182,23 +187,83 @@ class NativeVlcPreviewEngine(
 
     override fun setSurface(surface: Surface?) {
         if (this.surface === surface) return
-        
-        try {
-            if (mediaPlayer?.vlcVout?.areViewsAttached() == true) {
-                mediaPlayer?.vlcVout?.detachViews()
-            }
-        } catch (e: Exception) {
-            // ignore
+
+        runCatching {
+            if (mediaPlayer?.vlcVout?.areViewsAttached() == true) mediaPlayer?.vlcVout?.detachViews()
         }
-        
         this.surface = surface
-        if (surface != null && surface.isValid) {
-            try {
-                mediaPlayer?.vlcVout?.setVideoSurface(surface, null)
-                mediaPlayer?.vlcVout?.attachViews()
-            } catch (e: Exception) {
-                android.util.Log.e("NativeVlcPreviewEngine", "Failed to attach surface", e)
+        if (surface == null || !surface.isValid) return
+
+        try {
+            mediaPlayer?.vlcVout?.setVideoSurface(surface, null)
+            mediaPlayer?.vlcVout?.attachViews()
+            startPendingMediaIfOutputReady()
+        } catch (error: Exception) {
+            _currentError.value = "LibVLC could not attach the video surface: ${error.message ?: error.javaClass.simpleName}"
+            _currentState.value = PreviewState.ERROR
+            if (com.example.BuildConfig.DEBUG) {
+                android.util.Log.e("NativeVlcPreviewEngine", "Failed to attach surface", error)
             }
+        }
+    }
+
+    private fun startPendingMediaIfOutputReady() {
+        val player = mediaPlayer ?: return
+        if (!pendingMediaStart || !player.vlcVout.areViewsAttached()) return
+
+        pendingMediaStart = false
+        if (pauseAfterFirstFrame) {
+            // Decode one frame silently for a paused timeline preview.
+            player.setVolume(0)
+            scheduleFirstFrameWatchdog()
+        } else {
+            player.setVolume(requestedVolumePercent)
+        }
+        player.play()
+    }
+
+    private fun attachLayoutNow(layout: org.videolan.libvlc.util.VLCVideoLayout) {
+        if (attachedLayout !== layout || !layout.isAttachedToWindow) return
+        val player = mediaPlayer ?: return
+        try {
+            if (!player.vlcVout.areViewsAttached()) {
+                // Match VideoLAN's player setup: subtitles enabled and the layout's default
+                // SurfaceView retained for the platform video-output path.
+                player.attachViews(layout, null, true, false)
+            }
+            if (com.example.BuildConfig.DEBUG) {
+                android.util.Log.d(
+                    "NativeVlcPreviewEngine",
+                    "VLC output attached=${player.vlcVout.areViewsAttached()} layoutAttached=${layout.isAttachedToWindow}"
+                )
+            }
+            startPendingMediaIfOutputReady()
+        } catch (error: Exception) {
+            _currentError.value = "LibVLC could not attach its video output: ${error.message ?: error.javaClass.simpleName}"
+            _currentState.value = PreviewState.ERROR
+            if (com.example.BuildConfig.DEBUG) {
+                android.util.Log.e("NativeVlcPreviewEngine", "Failed to attach VLCVideoLayout", error)
+            }
+        }
+    }
+
+    private fun handleLayoutDetached(layout: org.videolan.libvlc.util.VLCVideoLayout) {
+        if (attachedLayout !== layout) return
+        val player = mediaPlayer ?: return
+        val resumePlayback = !pauseAfterFirstFrame && (player.isPlaying || pendingMediaStart)
+        if (player.isPlaying) player.pause()
+        runCatching { player.detachViews() }
+        videoOutputReady = false
+
+        if (currentUri != null) {
+            initialPositionMs = player.time.coerceAtLeast(0L)
+            lastWarmupTimeMs = null
+            cancelPauseAfterFirstFrame()
+            pauseAfterFirstFrame = !resumePlayback
+            pendingMediaStart = true
+            _firstFrameRendered.value = false
+            player.setVolume(if (pauseAfterFirstFrame) 0 else requestedVolumePercent)
+            _currentState.value = PreviewState.LOADING
         }
     }
 
@@ -260,15 +325,18 @@ class NativeVlcPreviewEngine(
             }
             player.media = media
             media.release()
+            pendingMediaStart = true
             if (pauseAfterFirstFrame) {
-                // Decode a preview frame without leaking audio from a paused timeline load.
+                // The silent first-frame warm-up starts only after VLC has a real video output.
                 player.setVolume(0)
-                scheduleFirstFrameWatchdog()
+            } else {
+                player.setVolume(requestedVolumePercent)
             }
-            // Start decoding to produce the first preview frame. A paused load is paused only
-            // after VLC has had time to submit that frame; play()+pause() in one call froze black.
-            player.play()
+            // Engine selection loads the source before Compose creates/attaches VLCVideoLayout.
+            // Starting now can decode into no output and leave the viewport permanently black.
+            startPendingMediaIfOutputReady()
         } catch (error: Exception) {
+            pendingMediaStart = false
             cancelPauseAfterFirstFrame()
             _currentState.value = PreviewState.ERROR
             _currentError.value = error.message ?: "Failed to load media"
@@ -276,23 +344,39 @@ class NativeVlcPreviewEngine(
     }
 
     override fun play() {
+        if (currentUri == null) return
         val wasWarmingUp = pauseAfterFirstFrame
         cancelPauseAfterFirstFrame()
-        mediaPlayer?.let { player ->
-            player.setVolume(requestedVolumePercent)
-            if (wasWarmingUp && player.time != initialPositionMs) {
-                player.time = initialPositionMs
-            }
+        val player = mediaPlayer ?: return
+        player.setVolume(requestedVolumePercent)
+        if (wasWarmingUp && player.time != initialPositionMs) {
+            player.time = initialPositionMs
+        }
+        pendingMediaStart = true
+        if (player.vlcVout.areViewsAttached()) {
+            pendingMediaStart = false
             player.play()
+        } else {
+            // A manually selected engine can receive play() before Compose has attached its view.
+            _currentState.value = PreviewState.LOADING
         }
     }
 
     override fun pause() {
-        // LibVLC must briefly run to decode and submit a frame for a paused preview. The initial
-        // Compose playback-state effect calls pause() as soon as the screen is composed; pausing
-        // here used to cancel the first-frame handoff and leave the viewport black/stale.
+        // Keep the initial silent warm-up alive so a paused timeline can still show its first frame.
         if (pauseAfterFirstFrame) return
-        mediaPlayer?.pause()
+        val player = mediaPlayer ?: return
+        if (pendingMediaStart && !player.vlcVout.areViewsAttached()) {
+            // A user can press pause before the view attachment completes. Convert the pending
+            // start to the same silent one-frame warm-up used for a paused project load.
+            pauseAfterFirstFrame = true
+            initialPositionMs = player.time.coerceAtLeast(0L)
+            lastWarmupTimeMs = null
+            _firstFrameRendered.value = false
+            player.setVolume(0)
+            return
+        }
+        player.pause()
     }
 
     override fun seekTo(timeUs: Long) {
@@ -314,27 +398,45 @@ class NativeVlcPreviewEngine(
     }
 
     fun attachToVideoLayout(layout: org.videolan.libvlc.util.VLCVideoLayout) {
-        try {
-            if (mediaPlayer?.vlcVout?.areViewsAttached() == true) {
-                mediaPlayer?.vlcVout?.detachViews()
-            }
-            mediaPlayer?.attachViews(layout, null, true, false)
-        } catch (e: Exception) {
-            android.util.Log.e("NativeVlcPreviewEngine", "Failed to attach VLCVideoLayout", e)
+        if (attachedLayout === layout) {
+            if (layout.isAttachedToWindow) attachLayoutNow(layout)
+            return
         }
+
+        detachFromVideoLayout()
+        attachedLayout = layout
+        val listener = object : View.OnAttachStateChangeListener {
+            override fun onViewAttachedToWindow(view: View) {
+                attachLayoutNow(layout)
+            }
+
+            override fun onViewDetachedFromWindow(view: View) {
+                handleLayoutDetached(layout)
+            }
+        }
+        layoutAttachListener = listener
+        layout.addOnAttachStateChangeListener(listener)
+
+        // AndroidView's factory runs before the view is attached to Compose's window. Defer the
+        // VLC surface handoff until the attach callback rather than starting decode into no vout.
+        if (layout.isAttachedToWindow) attachLayoutNow(layout)
+        else layout.post { if (layout.isAttachedToWindow) attachLayoutNow(layout) }
     }
 
-    fun detachFromVideoLayout() {
-        try {
-            mediaPlayer?.detachViews()
-        } catch (e: Exception) {
-            android.util.Log.e("NativeVlcPreviewEngine", "Failed to detach VLCVideoLayout", e)
-        }
+    fun detachFromVideoLayout(layoutBeingReleased: org.videolan.libvlc.util.VLCVideoLayout? = null) {
+        val layout = attachedLayout ?: return
+        if (layoutBeingReleased != null && layoutBeingReleased !== layout) return
+        layoutAttachListener?.let(layout::removeOnAttachStateChangeListener)
+        layoutAttachListener = null
+        handleLayoutDetached(layout)
+        attachedLayout = null
     }
 
     override fun release() {
+        detachFromVideoLayout()
         cancelPauseAfterFirstFrame()
-        mediaPlayer?.vlcVout?.detachViews()
+        pendingMediaStart = false
+        runCatching { mediaPlayer?.vlcVout?.detachViews() }
         mediaPlayer?.release()
         libvlc?.release()
         mediaPlayer = null
