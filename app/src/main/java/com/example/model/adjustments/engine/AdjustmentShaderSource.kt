@@ -1,23 +1,28 @@
 package com.example.model.adjustments.engine
 
 object AdjustmentShaderSource {
-    const val VERTEX_SHADER = """#version 300 es
-        in vec4 aFramePosition;
-        in vec4 aTexCoords;
-        out vec2 vTexCoords;
+    const val VERTEX_SHADER = """#version 100
+        attribute vec4 aFramePosition;
+        attribute vec4 aTexCoords;
+        varying vec2 vTexCoords;
         void main() {
             gl_Position = aFramePosition;
             vTexCoords = aTexCoords.xy;
         }
     """
 
-    const val FRAGMENT_SHADER = """#version 300 es
+    const val FRAGMENT_SHADER = """#version 100
+        #ifdef GL_FRAGMENT_PRECISION_HIGH
         precision highp float;
+        #else
+        precision mediump float;
+        #endif
         
         uniform sampler2D texSampler;
+        uniform int uGradeEnabled;
+
+        varying vec2 vTexCoords;
         
-        in vec2 vTexCoords;
-        out vec4 outColor;
         
         // Light
         uniform float uExposure; 
@@ -185,16 +190,10 @@ object AdjustmentShaderSource {
 
         // Color Management Helpers
         vec3 decodeSLog3(vec3 c) {
-            // S-Log3 to Linear approximate
-            vec3 dec = vec3(0.0);
-            for(int i=0; i<3; i++) {
-                if(c[i] >= 0.011) {
-                    dec[i] = pow(10.0, (c[i] - 0.420) / 0.2615) - 0.01;
-                } else {
-                    dec[i] = (c[i] - 0.0929) / 5.05;
-                }
-            }
-            return dec;
+            // S-Log3 to Linear approximate; vector math avoids dynamic component indexing in GLES 2.
+            vec3 high = pow(vec3(10.0), (c - vec3(0.420)) / 0.2615) - vec3(0.01);
+            vec3 low = (c - vec3(0.0929)) / 5.05;
+            return mix(low, high, step(vec3(0.011), c));
         }
 
         vec3 decodeCLog(vec3 c) {
@@ -218,13 +217,10 @@ object AdjustmentShaderSource {
 
         vec3 toneMapHighlightRolloff(vec3 color, float rolloff) { // 0 to 1
             float threshold = mix(0.9, 0.5, rolloff);
-            vec3 result = color;
-            for(int i=0; i<3; i++){
-                if(color[i] > threshold) {
-                    result[i] = threshold + (1.0 - threshold) * (1.0 - exp(-(color[i] - threshold) / (1.0 - threshold)));
-                }
-            }
-            return result;
+            float remainingRange = max(1.0 - threshold, 0.00001);
+            vec3 mapped = vec3(threshold) + (1.0 - threshold) *
+                (1.0 - exp(-(color - vec3(threshold)) / remainingRange));
+            return mix(color, mapped, step(vec3(threshold), color));
         }
         
         float smoothstep_val(float edge0, float edge1, float x) {
@@ -252,7 +248,7 @@ object AdjustmentShaderSource {
             return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
         }
 
-        vec3 sampleAs3DTexture(sampler2D tex, vec3 lutColor, float size) {
+        vec3 sampleAs3DTexture(vec3 lutColor, float size) {
             lutColor = clamp(lutColor, 0.0, 1.0) * (size - 1.0);
             float b_floor = floor(lutColor.b);
             float b_ceil = min(size - 1.0, b_floor + 1.0);
@@ -262,8 +258,8 @@ object AdjustmentShaderSource {
             float t_floor = (lutColor.g + b_floor * size + 0.5) / (size * size);
             float t_ceil = (lutColor.g + b_ceil * size + 0.5) / (size * size);
             
-            vec3 color0 = texture(tex, vec2(s, t_floor)).rgb;
-            vec3 color1 = texture(tex, vec2(s, t_ceil)).rgb;
+            vec3 color0 = texture2D(uLutTexture, vec2(s, t_floor)).rgb;
+            vec3 color1 = texture2D(uLutTexture, vec2(s, t_ceil)).rgb;
             
             return mix(color0, color1, b_fract);
         }
@@ -280,7 +276,11 @@ object AdjustmentShaderSource {
         }
 
         void main() {
-            vec4 color = texture(texSampler, vTexCoords);
+            vec4 color = texture2D(texSampler, vTexCoords);
+            if (uGradeEnabled == 0) {
+                gl_FragColor = color;
+                return;
+            }
             vec3 rgb = color.rgb;
             
             // 1. Input Transform (LOG to Linear)
@@ -371,8 +371,8 @@ object AdjustmentShaderSource {
             // Only add if user set something (avoid heavy loop if possible)
             // (Skipped full precise 8-bin interpolation for perf, basic closest-bin approximation)
             float bin = fract(hsl.x + 0.0625) * 8.0; 
-            int idx = int(bin) % 8;
-            int idxNext = (idx + 1) % 8;
+            int idx = int(bin);
+            int idxNext = idx == 7 ? 0 : idx + 1;
             float f = fract(bin);
             hShift = mix(getHslHue(idx), getHslHue(idxNext), f);
             sShift = mix(getHslSat(idx), getHslSat(idxNext), f);
@@ -448,7 +448,7 @@ object AdjustmentShaderSource {
             
             // Apply 3D LUT
             if (uLutEnabled == 1) {
-                vec3 lutColor = sampleAs3DTexture(uLutTexture, rgb, uLutSize);
+                vec3 lutColor = sampleAs3DTexture(rgb, uLutSize);
                 rgb = mix(rgb, lutColor, uLutIntensity);
             }
             
@@ -514,51 +514,54 @@ object AdjustmentShaderSource {
             if (uSharpness > 0.0) {
                 vec2 texel = 1.0 / max(vec2(uResolutionX, uResolutionY), vec2(1.0));
                 vec3 neighbors =
-                    texture(texSampler, vTexCoords + vec2(-texel.x, 0.0)).rgb +
-                    texture(texSampler, vTexCoords + vec2( texel.x, 0.0)).rgb +
-                    texture(texSampler, vTexCoords + vec2(0.0, -texel.y)).rgb +
-                    texture(texSampler, vTexCoords + vec2(0.0,  texel.y)).rgb;
+                    texture2D(texSampler, vTexCoords + vec2(-texel.x, 0.0)).rgb +
+                    texture2D(texSampler, vTexCoords + vec2( texel.x, 0.0)).rgb +
+                    texture2D(texSampler, vTexCoords + vec2(0.0, -texel.y)).rgb +
+                    texture2D(texSampler, vTexCoords + vec2(0.0,  texel.y)).rgb;
                 rgb += (color.rgb - neighbors * 0.25) * (uSharpness * 3.0);
             }
 
-            outColor = vec4(clamp(rgb, 0.0, 1.0), color.a);
+            gl_FragColor = vec4(clamp(rgb, 0.0, 1.0), color.a);
         }
     """
     
-    const val SHARPEN_FRAGMENT_SHADER = """#version 300 es
+    const val SHARPEN_FRAGMENT_SHADER = """#version 100
+        #ifdef GL_FRAGMENT_PRECISION_HIGH
         precision highp float;
+        #else
+        precision mediump float;
+        #endif
         
         uniform sampler2D texSampler;
-        in vec2 vTexCoords;
-        out vec4 outColor;
-        
+        varying vec2 vTexCoords;
+
         uniform float uSharpness;
         uniform float uResolutionX;
         uniform float uResolutionY;
         
         void main() {
-            vec4 color = texture(texSampler, vTexCoords);
+            vec4 color = texture2D(texSampler, vTexCoords);
             if (uSharpness <= 0.0) {
-                outColor = color;
+                gl_FragColor = color;
                 return;
             }
             
             vec2 px = 1.0 / vec2(uResolutionX, uResolutionY);
             
             vec3 blur = vec3(0.0);
-            blur += texture(texSampler, vTexCoords + vec2(-px.x, -px.y)).rgb;
-            blur += texture(texSampler, vTexCoords + vec2( 0.0, -px.y)).rgb;
-            blur += texture(texSampler, vTexCoords + vec2( px.x, -px.y)).rgb;
-            blur += texture(texSampler, vTexCoords + vec2(-px.x,  0.0)).rgb;
+            blur += texture2D(texSampler, vTexCoords + vec2(-px.x, -px.y)).rgb;
+            blur += texture2D(texSampler, vTexCoords + vec2( 0.0, -px.y)).rgb;
+            blur += texture2D(texSampler, vTexCoords + vec2( px.x, -px.y)).rgb;
+            blur += texture2D(texSampler, vTexCoords + vec2(-px.x,  0.0)).rgb;
             blur += color.rgb;
-            blur += texture(texSampler, vTexCoords + vec2( px.x,  0.0)).rgb;
-            blur += texture(texSampler, vTexCoords + vec2(-px.x,  px.y)).rgb;
-            blur += texture(texSampler, vTexCoords + vec2( 0.0,  px.y)).rgb;
-            blur += texture(texSampler, vTexCoords + vec2( px.x,  px.y)).rgb;
+            blur += texture2D(texSampler, vTexCoords + vec2( px.x,  0.0)).rgb;
+            blur += texture2D(texSampler, vTexCoords + vec2(-px.x,  px.y)).rgb;
+            blur += texture2D(texSampler, vTexCoords + vec2( 0.0,  px.y)).rgb;
+            blur += texture2D(texSampler, vTexCoords + vec2( px.x,  px.y)).rgb;
             blur /= 9.0;
             
             vec3 sharpened = color.rgb + (color.rgb - blur) * (uSharpness * 3.0);
-            outColor = vec4(clamp(sharpened, 0.0, 1.0), color.a);
+            gl_FragColor = vec4(clamp(sharpened, 0.0, 1.0), color.a);
         }
     """
 }

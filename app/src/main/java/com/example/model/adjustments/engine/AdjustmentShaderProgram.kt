@@ -41,24 +41,28 @@ class AdjustmentShaderProgram(
             
             
             val params = provider()
-            
-            AdjustmentUniformBinder.bindUniforms(glProgram, params, presentationTimeUs)
-            glProgram.setFloatUniform("uSharpness", params.sharpness)
-            glProgram.setFloatUniform("uResolutionX", outputSize.width.coerceAtLeast(1).toFloat())
-            glProgram.setFloatUniform("uResolutionY", outputSize.height.coerceAtLeast(1).toFloat())
+            val gradeEnabled = params.hasActivePreviewEffect()
+            glProgram.setIntUniform("uGradeEnabled", if (gradeEnabled) 1 else 0)
 
-            val lutData = params.lutId?.let { com.example.model.colorgrade.lut.LutRepository.getCachedData(it) }
-            val lutTexId = LutTextureManager.bindLutTexture(lutData)
-            if (lutTexId != -1 && lutData != null) {
-                glProgram.setIntUniform("uLutEnabled", 1)
-                glProgram.setFloatUniform("uLutIntensity", params.lutIntensity)
-                glProgram.setFloatUniform("uLutSize", lutData.size.toFloat())
-                glProgram.setSamplerTexIdUniform("uLutTexture", lutTexId, 1)
-            } else {
-                glProgram.setIntUniform("uLutEnabled", 0)
-                glProgram.setSamplerTexIdUniform("uLutTexture", inputTexId, 1) // Provide a dummy texture to avoid crash
+            if (gradeEnabled) {
+                AdjustmentUniformBinder.bindUniforms(glProgram, params, presentationTimeUs)
+                glProgram.setFloatUniform("uSharpness", params.sharpness)
+                glProgram.setFloatUniform("uResolutionX", outputSize.width.coerceAtLeast(1).toFloat())
+                glProgram.setFloatUniform("uResolutionY", outputSize.height.coerceAtLeast(1).toFloat())
+
+                val lutData = params.lutId?.let { com.example.model.colorgrade.lut.LutRepository.getCachedData(it) }
+                val lutTexId = LutTextureManager.bindLutTexture(lutData)
+                if (lutTexId != -1 && lutData != null) {
+                    glProgram.setIntUniform("uLutEnabled", 1)
+                    glProgram.setFloatUniform("uLutIntensity", params.lutIntensity)
+                    glProgram.setFloatUniform("uLutSize", lutData.size.toFloat())
+                    glProgram.setSamplerTexIdUniform("uLutTexture", lutTexId, 1)
+                } else {
+                    glProgram.setIntUniform("uLutEnabled", 0)
+                    glProgram.setSamplerTexIdUniform("uLutTexture", inputTexId, 1)
+                }
             }
-            
+
             glProgram.setBufferAttribute("aFramePosition", GlUtil.getNormalizedCoordinateBounds(), GlUtil.HOMOGENEOUS_COORDINATE_VECTOR_SIZE)
             glProgram.setBufferAttribute("aTexCoords", GlUtil.getTextureCoordinateBounds(), GlUtil.HOMOGENEOUS_COORDINATE_VECTOR_SIZE)
 

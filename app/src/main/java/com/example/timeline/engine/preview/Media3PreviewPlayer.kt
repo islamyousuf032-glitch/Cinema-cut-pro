@@ -8,6 +8,7 @@ import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.VideoFrameProcessor
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.analytics.AnalyticsListener
@@ -72,7 +73,7 @@ class Media3FallbackPreviewEngine(context: Context) : PreviewEngine {
 
     private var timeTrackerJob: kotlinx.coroutines.Job? = null
     private var pausedGradeRefreshJob: kotlinx.coroutines.Job? = null
-    private var pausedGradeRefreshPositionMs = 0L
+    private var pausedGradeRefreshPending = false
     private var lastPausedGradeRefreshMs = 0L
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
@@ -106,7 +107,10 @@ class Media3FallbackPreviewEngine(context: Context) : PreviewEngine {
                 )}
                 when (playbackState) {
                     Player.STATE_BUFFERING -> _currentState.value = PreviewState.LOADING
-                    Player.STATE_READY -> _currentState.value = if(exoPlayer.isPlaying) PreviewState.PLAYING else PreviewState.READY
+                    Player.STATE_READY -> {
+                        _currentState.value = if (exoPlayer.isPlaying) PreviewState.PLAYING else PreviewState.READY
+                        if (pausedGradeRefreshPending && !exoPlayer.isPlaying) requestPausedGradeRefresh()
+                    }
                     Player.STATE_ENDED -> {
                         // Emit the final position once; ExoPlayer stops its 30fps tracker as soon
                         // as isPlaying becomes false, but the timeline may still have another clip.
@@ -287,29 +291,43 @@ class Media3FallbackPreviewEngine(context: Context) : PreviewEngine {
     private fun cancelPausedGradeRefresh() {
         pausedGradeRefreshJob?.cancel()
         pausedGradeRefreshJob = null
+        pausedGradeRefreshPending = false
     }
 
-    private fun requestPausedGradeRefresh(positionMs: Long) {
-        pausedGradeRefreshPositionMs = positionMs
+    /**
+     * A grade update does not need to seek or disturb the playhead. Media3 exposes REDRAW for
+     * re-running the existing effect graph on its held frame while paused.
+     */
+    private fun requestPausedGradeRefresh() {
+        pausedGradeRefreshPending = true
+        if (exoPlayer.isPlaying || released.get()) return
+
         val now = android.os.SystemClock.elapsedRealtime()
         val waitMs = (33L - (now - lastPausedGradeRefreshMs)).coerceAtLeast(0L)
-        if (waitMs == 0L) {
-            cancelPausedGradeRefresh()
-            if (!exoPlayer.isPlaying) {
-                exoPlayer.seekTo(pausedGradeRefreshPositionMs)
-                lastPausedGradeRefreshMs = now
+        pausedGradeRefreshJob?.cancel()
+        pausedGradeRefreshJob = null
+
+        val redraw = {
+            pausedGradeRefreshJob = null
+            if (!released.get() && !exoPlayer.isPlaying && pausedGradeRefreshPending &&
+                exoPlayer.playbackState == Player.STATE_READY
+            ) {
+                try {
+                    exoPlayer.setVideoEffects(VideoFrameProcessor.REDRAW)
+                    pausedGradeRefreshPending = false
+                    lastPausedGradeRefreshMs = android.os.SystemClock.elapsedRealtime()
+                } catch (error: Exception) {
+                    if (com.example.BuildConfig.DEBUG) {
+                        android.util.Log.w("Media3PreviewPlayer", "Paused-frame grade redraw failed", error)
+                    }
+                }
             }
-            return
         }
 
-        cancelPausedGradeRefresh()
-        pausedGradeRefreshJob = scope.launch {
+        if (waitMs == 0L) redraw()
+        else pausedGradeRefreshJob = scope.launch {
             delay(waitMs)
-            pausedGradeRefreshJob = null
-            if (!exoPlayer.isPlaying) {
-                exoPlayer.seekTo(pausedGradeRefreshPositionMs)
-                lastPausedGradeRefreshMs = android.os.SystemClock.elapsedRealtime()
-            }
+            redraw()
         }
     }
     
@@ -353,9 +371,9 @@ class Media3FallbackPreviewEngine(context: Context) : PreviewEngine {
                 exoPlayer.seekTo(safePositionMs)
                 lastPausedGradeRefreshMs = android.os.SystemClock.elapsedRealtime()
             } else if (needsPausedGradeRefresh) {
-                // Coalesce high-frequency slider updates to at most ~30 refresh seeks/sec. The
-                // shader parameters are updated immediately; each rendered frame uses the latest.
-                requestPausedGradeRefresh(safePositionMs)
+                // Coalesce high-frequency slider updates to at most ~30 paused-frame redraws/sec.
+                // The shader parameters update immediately; the redraw uses the latest values.
+                requestPausedGradeRefresh()
             }
             val isReady = exoPlayer.playbackState == Player.STATE_READY
             _state.update { it.copy(usingProxy = useProxy, isReady = isReady) }

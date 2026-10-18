@@ -114,6 +114,40 @@ data class VideoAdjustmentParams(
     val blueOffset: Float = 0f,
     val rgbChannelMixer: FloatArray? = null
 ) {
+    /** True when the live preview shader can copy the input frame without grading work. */
+    fun hasActivePreviewEffect(): Boolean {
+        if (
+            exposureStops != 0f || brightness != 0f || contrast != 0f || highlights != 0f ||
+            shadows != 0f || whites != 0f || blacks != 0f || fade != 0f ||
+            saturation != 1f || vibrance != 0f || temperature != 0f ||
+            temperatureKelvin != null || tint != 0f || sharpness != 0f || clarity != 0f ||
+            structure != 0f || dehaze != 0f || grainAmount != 0f || vignetteAmount != 0f ||
+            lift.x != 0f || lift.y != 0f || lift.z != 0f ||
+            gamma.x != 1f || gamma.y != 1f || gamma.z != 1f ||
+            gain.x != 1f || gain.y != 1f || gain.z != 1f ||
+            offsetWheel.x != 0f || offsetWheel.y != 0f || offsetWheel.z != 0f ||
+            skinToneProtection != 0f || skinToneShowMask ||
+            shadowColorBalance.x != 0f || shadowColorBalance.y != 0f || shadowColorBalance.z != 0f ||
+            midtoneColorBalance.x != 0f || midtoneColorBalance.y != 0f || midtoneColorBalance.z != 0f ||
+            highlightColorBalance.x != 0f || highlightColorBalance.y != 0f || highlightColorBalance.z != 0f ||
+            inputLogType != "None" || inputLogProfile != LogProfile.NONE ||
+            inputColorSpace != ColorSpaceProfile.REC_709 || outputColorSpace != ColorSpaceProfile.REC_709 ||
+            toneMappingMode != com.example.model.adjustments.engine.ToneMappingMode.NONE || lutId != null ||
+            qualEnabled || qualShowMatte || qualInvert || qualHueShift != 0f || qualSat != 1f ||
+            qualLum != 0f || qualContrast != 0f || qualTemp != 0f || qualTint != 0f ||
+            redChannelMultiplier != 1f || greenChannelMultiplier != 1f || blueChannelMultiplier != 1f ||
+            redOffset != 0f || greenOffset != 0f || blueOffset != 0f ||
+            hslHue?.any { it != 0f } == true || hslSat?.any { it != 0f } == true ||
+            hslLum?.any { it != 0f } == true
+        ) return true
+
+        val mixer = rgbChannelMixer ?: return false
+        return mixer.size != 9 ||
+            mixer[0] != 1f || mixer[1] != 0f || mixer[2] != 0f ||
+            mixer[3] != 0f || mixer[4] != 1f || mixer[5] != 0f ||
+            mixer[6] != 0f || mixer[7] != 0f || mixer[8] != 1f
+    }
+
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
         if (javaClass != other?.javaClass) return false
@@ -166,6 +200,24 @@ data class VideoAdjustmentParams(
         if (outputColorSpace != other.outputColorSpace) return false
         if (toneMappingMode != other.toneMappingMode) return false
         if (highlightRolloff != other.highlightRolloff) return false
+        if (qualEnabled != other.qualEnabled) return false
+        if (qualHueCenter != other.qualHueCenter) return false
+        if (qualHueWidth != other.qualHueWidth) return false
+        if (qualHueFeather != other.qualHueFeather) return false
+        if (qualSatMin != other.qualSatMin) return false
+        if (qualSatMax != other.qualSatMax) return false
+        if (qualSatFeather != other.qualSatFeather) return false
+        if (qualLumMin != other.qualLumMin) return false
+        if (qualLumMax != other.qualLumMax) return false
+        if (qualLumFeather != other.qualLumFeather) return false
+        if (qualInvert != other.qualInvert) return false
+        if (qualShowMatte != other.qualShowMatte) return false
+        if (qualHueShift != other.qualHueShift) return false
+        if (qualSat != other.qualSat) return false
+        if (qualLum != other.qualLum) return false
+        if (qualContrast != other.qualContrast) return false
+        if (qualTemp != other.qualTemp) return false
+        if (qualTint != other.qualTint) return false
         
         if (hslHue != null) {
             if (other.hslHue == null) return false
@@ -243,6 +295,24 @@ data class VideoAdjustmentParams(
         result = 31 * result + outputColorSpace.hashCode()
         result = 31 * result + toneMappingMode.hashCode()
         result = 31 * result + highlightRolloff.hashCode()
+        result = 31 * result + qualEnabled.hashCode()
+        result = 31 * result + qualHueCenter.hashCode()
+        result = 31 * result + qualHueWidth.hashCode()
+        result = 31 * result + qualHueFeather.hashCode()
+        result = 31 * result + qualSatMin.hashCode()
+        result = 31 * result + qualSatMax.hashCode()
+        result = 31 * result + qualSatFeather.hashCode()
+        result = 31 * result + qualLumMin.hashCode()
+        result = 31 * result + qualLumMax.hashCode()
+        result = 31 * result + qualLumFeather.hashCode()
+        result = 31 * result + qualInvert.hashCode()
+        result = 31 * result + qualShowMatte.hashCode()
+        result = 31 * result + qualHueShift.hashCode()
+        result = 31 * result + qualSat.hashCode()
+        result = 31 * result + qualLum.hashCode()
+        result = 31 * result + qualContrast.hashCode()
+        result = 31 * result + qualTemp.hashCode()
+        result = 31 * result + qualTint.hashCode()
         result = 31 * result + (hslHue?.contentHashCode() ?: 0)
         result = 31 * result + (hslSat?.contentHashCode() ?: 0)
         result = 31 * result + (hslLum?.contentHashCode() ?: 0)
