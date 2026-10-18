@@ -37,6 +37,7 @@ fun VideoViewportSection(
     val previewSettings by editorViewModel.previewSettings.collectAsState()
     val currentClip by timelinePreviewController.activeClip.collectAsState()
     val currentAsset by timelinePreviewController.activeAsset.collectAsState()
+    val activeSourceIsProxy by timelinePreviewController.activeSourceIsProxy.collectAsState()
     val playerState by timelinePreviewController.previewEngine.currentState.collectAsState()
     val playerError by timelinePreviewController.previewEngine.currentError.collectAsState()
     val firstFrameRendered by timelinePreviewController.previewEngine.firstFrameRendered.collectAsState()
@@ -91,7 +92,13 @@ fun VideoViewportSection(
     }
 
     var handledPlaybackError by remember { mutableStateOf<Pair<com.example.timeline.engine.preview.PreviewEngineType, String>?>(null) }
-    LaunchedEffect(currentAsset?.assetId, playerError, engineType, previewSettings.autoFallbackOnFailure) {
+    LaunchedEffect(
+        currentAsset?.assetId,
+        playerError,
+        engineType,
+        activeSourceIsProxy,
+        previewSettings.autoFallbackOnFailure
+    ) {
         val error = playerError
         val asset = currentAsset
         if (error == null) {
@@ -102,13 +109,19 @@ fun VideoViewportSection(
         if (handledPlaybackError == errorKey) return@LaunchedEffect
         handledPlaybackError = errorKey
 
+        val fellBackFromProxy = asset != null && activeSourceIsProxy &&
+            timelinePreviewController.fallbackFromProxy(asset.assetId)
+        if (fellBackFromProxy && asset != null) {
+            timelineViewModel.markAssetProxyPlaybackFailed(asset.assetId)
+        }
+
         val isLibVlcEngine = engineType == com.example.timeline.engine.preview.PreviewEngineType.FFMPEG_NATIVE ||
             engineType == com.example.timeline.engine.preview.PreviewEngineType.VLC_NATIVE
         if (isLibVlcEngine && previewSettings.autoFallbackOnFailure) {
             timelinePreviewController.setEngineType(com.example.timeline.engine.preview.PreviewEngineType.MEDIA3_FALLBACK)
             editorViewModel.updateSelectedEngine(com.example.timeline.engine.preview.PreviewEngineType.MEDIA3_FALLBACK)
             if (isPlaying) timelinePreviewController.play()
-        } else if (asset != null) {
+        } else if (asset != null && !fellBackFromProxy) {
             timelineViewModel.markAssetPlaybackFailed(asset.assetId)
         }
     }
@@ -229,6 +242,7 @@ fun VideoViewportSection(
                 currentAsset = currentAsset,
                 playerError = playerError,
                 engineType = engineType,
+                isProxySource = activeSourceIsProxy,
                 onRequestProxy = { timelineViewModel.generateProxy(it) },
                 onRequestRelink = onRelinkRequest,
                 onRetryPlayback = { 

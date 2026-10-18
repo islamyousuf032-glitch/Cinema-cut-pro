@@ -115,6 +115,22 @@ class TimelineViewModel(context: Context) : ViewModel() {
         updateState(stateNow.project.copy(mediaAssets = updatedAssets))
     }
 
+    /** Marks only a proxy that was actually selected by the preview engine as failed. */
+    fun markAssetProxyPlaybackFailed(assetId: String) {
+        val stateNow = _uiState.value
+        val updatedAssets = stateNow.project.mediaAssets.map { asset ->
+            if (asset.assetId == assetId && asset.proxyStatus == ProxyStatus.READY) {
+                asset.copy(
+                    proxyStatus = ProxyStatus.FAILED,
+                    errorMessage = "Proxy playback failed; the original media will be tried."
+                )
+            } else asset
+        }
+        if (updatedAssets != stateNow.project.mediaAssets) {
+            updateState(stateNow.project.copy(mediaAssets = updatedAssets))
+        }
+    }
+
     fun loadProject(project: TimelineProject) {
         historyManager.clear()
         _playheadFrame.value = 0L

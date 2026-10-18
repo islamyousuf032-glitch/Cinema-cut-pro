@@ -6,10 +6,14 @@ import com.example.timeline.media.ProxyStatus
 
 object PreviewSourceResolver {
 
-    fun resolvePlayableUri(asset: MediaAsset, preferProxy: Boolean): Pair<String?, Boolean> {
+    fun resolvePlayableUri(
+        asset: MediaAsset,
+        preferProxy: Boolean,
+        forceOriginal: Boolean = false
+    ): Pair<String?, Boolean> {
         val hasProxy = asset.proxyInfo != null && asset.proxyStatus == ProxyStatus.READY
         val isDirectFailed = asset.previewStatus == PreviewStatus.DIRECT_FAILED_RUNTIME
-        val useProxy = hasProxy && (preferProxy || isDirectFailed)
+        val useProxy = !forceOriginal && hasProxy && (preferProxy || isDirectFailed)
 
         if (useProxy) {
             return Pair(asset.proxyInfo!!.uriString, true)
@@ -17,18 +21,16 @@ object PreviewSourceResolver {
 
         val localOriginalUriString = asset.localOriginalUriString
         val originalUriString = asset.originalUriString
-
-        val uriToUse = if (!localOriginalUriString.isNullOrBlank()) {
-            localOriginalUriString
-        } else {
-            originalUriString
-        }
-
+        val uriToUse = if (!localOriginalUriString.isNullOrBlank()) localOriginalUriString else originalUriString
         return Pair(uriToUse, false)
     }
 
-    fun resolveSource(asset: MediaAsset, preferProxy: Boolean): PreviewMediaSource? {
-        val (uri, useProxy) = resolvePlayableUri(asset, preferProxy)
+    fun resolveSource(
+        asset: MediaAsset,
+        preferProxy: Boolean,
+        forceOriginal: Boolean = false
+    ): PreviewMediaSource? {
+        val (uri, useProxy) = resolvePlayableUri(asset, preferProxy, forceOriginal)
         if (uri.isNullOrBlank()) return null
 
         val mimeType = if (useProxy) {

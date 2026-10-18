@@ -38,6 +38,23 @@ class PreviewSourceResolverTest {
         assertTrue(source?.isProxy ?: false)
     }
 
+    @Test
+    fun forceOriginalOverridesProxyPreferenceAndDirectFailureFallback() {
+        val source = PreviewSourceResolver.resolveSource(
+            asset(
+                localUri = "/data/user/0/example/files/source.mp4",
+                proxyReady = true
+            ).copy(previewStatus = com.example.timeline.media.PreviewStatus.DIRECT_FAILED_RUNTIME),
+            preferProxy = true,
+            forceOriginal = true
+        )
+
+        assertNotNull(source)
+        assertEquals("/data/user/0/example/files/source.mp4", source?.uri)
+        assertEquals("video/mp4", source?.mimeType)
+        assertFalse(source?.isProxy ?: true)
+    }
+
     private fun asset(
         localUri: String? = null,
         proxyReady: Boolean = false

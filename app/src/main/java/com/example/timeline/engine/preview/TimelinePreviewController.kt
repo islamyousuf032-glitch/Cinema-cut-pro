@@ -62,6 +62,38 @@ class TimelinePreviewController(private val context: Context) {
     private val _activeAsset = MutableStateFlow<MediaAsset?>(null)
     val activeAsset: StateFlow<MediaAsset?> = _activeAsset.asStateFlow()
 
+    private val _activeSourceIsProxy = MutableStateFlow(false)
+    /** True only when the engine was actually given the READY proxy URI. */
+    val activeSourceIsProxy: StateFlow<Boolean> = _activeSourceIsProxy.asStateFlow()
+    private val proxyPlaybackFailedAssetIds = mutableSetOf<String>()
+
+    private fun resolveSource(asset: MediaAsset): PreviewMediaSource? {
+        if (asset.proxyStatus != com.example.timeline.media.ProxyStatus.READY || asset.proxyInfo == null) {
+            proxyPlaybackFailedAssetIds.remove(asset.assetId)
+        }
+        val forceOriginal = asset.assetId in proxyPlaybackFailedAssetIds
+        return PreviewSourceResolver.resolveSource(
+            asset = asset,
+            preferProxy = preferProxyPlayback,
+            forceOriginal = forceOriginal
+        ).also { source ->
+            _activeSourceIsProxy.value = source?.isProxy == true
+        }
+    }
+
+    /**
+     * Switches away from a proxy that actually failed, without marking the original media as bad.
+     * Returns false when the current source is not the active asset's proxy.
+     */
+    fun fallbackFromProxy(assetId: String): Boolean {
+        val asset = _activeAsset.value ?: return false
+        val project = activeProject ?: return false
+        if (asset.assetId != assetId || !_activeSourceIsProxy.value) return false
+        proxyPlaybackFailedAssetIds += assetId
+        loadClipAtPlayhead(project, lastPlayheadFrame, forceSeek = true)
+        return true
+    }
+
     private val _engineTypeFlow = MutableStateFlow(previewEngine.engineType)
     val engineTypeFlow: StateFlow<PreviewEngineType> = _engineTypeFlow.asStateFlow()
     
@@ -170,7 +202,7 @@ class TimelinePreviewController(private val context: Context) {
                     rate.denominator
                 )
                 val sourcePositionMs = sourcePositionUs / 1_000L
-                val source = PreviewSourceResolver.resolveSource(asset, preferProxy = preferProxyPlayback)
+                val source = resolveSource(asset)
                 val evaluatedParams = evaluatedPreviewParams(project, lastPlayheadFrame)
 
                 if (source != null) {
@@ -183,6 +215,8 @@ class TimelinePreviewController(private val context: Context) {
                         forceSeek = true
                     )
                 }
+            } else {
+                _activeSourceIsProxy.value = false
             }
 
             setupEngineListeners(newEngine)
@@ -229,6 +263,7 @@ class TimelinePreviewController(private val context: Context) {
         if (topClip == null) {
             _activeClip.value = null
             _activeAsset.value = null
+            _activeSourceIsProxy.value = false
             val eng = previewEngine
             if (eng is Media3FallbackPreviewEngine) {
                 eng.clearMedia()
@@ -243,6 +278,7 @@ class TimelinePreviewController(private val context: Context) {
         _activeAsset.value = asset
 
         if (asset == null) {
+            _activeSourceIsProxy.value = false
             val eng = previewEngine
             if (eng is Media3FallbackPreviewEngine) {
                 eng.clearMedia()
@@ -259,7 +295,7 @@ class TimelinePreviewController(private val context: Context) {
 
         // Prefer a ready proxy for editor playback. Source MIME is passed through so Media3 can
         // select the right extractor for opaque SAF/content URIs and report useful failures.
-        val source = PreviewSourceResolver.resolveSource(asset, preferProxy = preferProxyPlayback)
+        val source = resolveSource(asset)
 
         if (source == null) {
             val engine = previewEngine
@@ -301,7 +337,7 @@ class TimelinePreviewController(private val context: Context) {
     suspend fun extractCurrentFrameBitmap(): android.graphics.Bitmap? {
         val clip = _activeClip.value ?: return null
         val asset = _activeAsset.value ?: return null
-        val uriStr = PreviewSourceResolver.resolvePlayableUri(asset, false).first ?: return null
+        val uriStr = PreviewSourceResolver.resolvePlayableUri(asset, false, forceOriginal = true).first ?: return null
         val rat = activeProject?.settings?.getFpsRational() ?: return null
         val sourceFrame = TimelineFrameResolver.resolveSourceFrame(lastPlayheadFrame, clip)
         val sourceTimeUs = TimelineFrameResolver.convertFrameToMicroseconds(sourceFrame, rat.numerator, rat.denominator)

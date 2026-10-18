@@ -17,6 +17,7 @@ fun ViewportStatusCard(
     currentAsset: MediaAsset?,
     playerError: String?,
     engineType: com.example.timeline.engine.preview.PreviewEngineType,
+    isProxySource: Boolean = false,
     onRequestProxy: (String) -> Unit,
     onRequestRelink: (String) -> Unit,
     onRetryPlayback: () -> Unit,
@@ -65,7 +66,7 @@ fun ViewportStatusCard(
         }
         
         if (playerError != null) {
-            val msg = if (currentAsset?.proxyStatus == ProxyStatus.READY) "Proxy Playback Error: $playerError" else "${engineType.displayName} Playback Error: $playerError"
+            val msg = if (isProxySource) "Proxy Playback Error: $playerError" else "${engineType.displayName} Playback Error: $playerError"
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(2.dp)) {
                 Text(msg, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                 Spacer(modifier = Modifier.width(8.dp))
