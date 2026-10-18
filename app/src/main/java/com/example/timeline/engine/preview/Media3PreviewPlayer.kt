@@ -214,19 +214,20 @@ class Media3FallbackPreviewEngine(context: Context) : PreviewEngine {
     }
 
     private fun sanitizeSourceDetail(detail: String?, sourceUri: Uri?): String? {
-        if (detail == null) return null
-        var sanitized = detail
+        var sanitized: String = detail ?: return null
         if (sourceUri != null) {
+            val scheme = sourceUri.scheme
+            val authority = sourceUri.authority
             val safeContext = when {
-                sourceUri.scheme.isNullOrBlank() -> "source"
-                sourceUri.authority.isNullOrBlank() -> "${sourceUri.scheme} URI"
-                else -> "${sourceUri.scheme}://${sourceUri.authority}"
+                scheme.isNullOrBlank() -> "source"
+                authority.isNullOrBlank() -> "$scheme URI"
+                else -> "$scheme://$authority"
             }
             sourceUri.toString().takeIf(String::isNotBlank)?.let { rawUri ->
                 sanitized = sanitized.replace(rawUri, safeContext)
             }
-            sourceUri.path?.takeIf(String::isNotBlank)?.let { path ->
-                sanitized = sanitized.replace(path, "[source path]")
+            sourceUri.path?.let { path ->
+                if (path.isNotBlank()) sanitized = sanitized.replace(path, "[source path]")
             }
         }
         return sanitized.take(512)

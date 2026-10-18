@@ -111,9 +111,9 @@ class Media3TranscoderBackend(private val context: Context) : TranscoderBackend 
                 }
                 if (progressState == Transformer.PROGRESS_STATE_AVAILABLE) {
                     trySend(TranscodeProgress.Progress(progressHolder.progress / 100f))
-                } else if (progressState == Transformer.PROGRESS_STATE_UNAVAILABLE || progressState == Transformer.PROGRESS_STATE_NO_TRANSFORMATION) {
-                    // Try waiting or let the listener close it
                 }
+                // Completion and errors are reported by the Transformer listener; other progress
+                // states are transient or permanently unavailable and need no separate action.
                 delay(500)
             }
         }
