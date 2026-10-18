@@ -68,7 +68,8 @@ class StillFramePreviewEngine(private val context: Context) : PreviewEngine {
         sourcePositionMs: Long,
         evaluatedParams: VideoAdjustmentParams?,
         presentationTimeUs: Long,
-        forceSeek: Boolean
+        forceSeek: Boolean,
+        mimeType: String?
     ) {
         val uriChanged = uriString != currentUri
         currentUri = uriString

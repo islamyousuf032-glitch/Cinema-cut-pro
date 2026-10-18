@@ -78,18 +78,25 @@ fun ChromaProApp(viewModel: MainViewModel = viewModel()) {
     val timelinePreviewController = remember { com.example.timeline.engine.preview.TimelinePreviewController(context) }
     val previewActiveClip by timelinePreviewController.activeClip.collectAsState()
     
-    androidx.compose.runtime.DisposableEffect(timelinePreviewController, timelineViewModel, editorViewModel) {
+    androidx.compose.runtime.DisposableEffect(timelinePreviewController) {
         timelinePreviewController.onPlayheadAdvanced = { newFrame ->
             editorViewModel.updatePlayheadFrame(newFrame)
             timelineViewModel.setPlayheadFrame(newFrame)
         }
-        onDispose { timelinePreviewController.onPlayheadAdvanced = null }
+        onDispose {
+            timelinePreviewController.onPlayheadAdvanced = null
+            timelinePreviewController.release()
+        }
     }
     
 
     val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
-    DisposableEffect(lifecycleOwner) {
+    DisposableEffect(lifecycleOwner, timelinePreviewController, timelineViewModel) {
         val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_PAUSE) {
+                timelinePreviewController.pause()
+                timelineViewModel.pausePlay()
+            }
             if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
                 if (com.example.timeline.core.ActiveProjectManager.isDirty) {
                     com.example.timeline.core.ActiveProjectManager.activeProject?.let { 
@@ -238,13 +245,31 @@ fun ChromaProApp(viewModel: MainViewModel = viewModel()) {
 
             if (com.example.BuildConfig.DEBUG && timelineUiState.showDebugPanel) {
                 val engine = timelinePreviewController.previewEngine
+                val playbackFailure = engine.currentPlaybackFailure?.value
+                val media3Metrics = (engine as? com.example.timeline.engine.preview.Media3FallbackPreviewEngine)
+                    ?.playbackMetrics?.collectAsState()?.value
                 val diagnostics = mapOf(
-                    "activeEngine" to if (engine.currentError.collectAsState().value != null) "STILL_FRAME_FALLBACK" else engine.engineType.name,
+                    "activeEngine" to engine.engineType.name,
+                    "previewState" to engine.currentState.collectAsState().value.name,
+                    "playing" to engine.isPlaying.toString(),
+                    "positionUs" to engine.currentPositionUs.toString(),
+                    "durationUs" to engine.durationUs.toString(),
+                    "media3Decoder" to (media3Metrics?.videoDecoderName ?: "unknown"),
+                    "decoderInitMs" to (media3Metrics?.decoderInitializationDurationMs?.toString() ?: "unknown"),
+                    "droppedVideoFrames" to (media3Metrics?.droppedVideoFrames?.toString() ?: "unknown"),
+                    "avgFrameProcessingOffsetMs" to (media3Metrics?.averageVideoFrameProcessingOffsetMs?.toString() ?: "unknown"),
                     "libVlcAvailable" to runCatching { Class.forName("org.videolan.libvlc.LibVLC"); "true" }.getOrDefault("false"),
-                    "ffmpegPlaybackBackend" to if (engine.engineType == com.example.timeline.engine.preview.PreviewEngineType.FFMPEG_NATIVE) "LibVLC native player" else "inactive",
-                    "directFfmpegJniDecoderAvailable" to "false",
-                    "media3FallbackUsed" to (engine.engineType.name == "MEDIA3_FALLBACK").toString(),
+                    "libVlcPlaybackBackend" to if (
+                        engine.engineType == com.example.timeline.engine.preview.PreviewEngineType.FFMPEG_NATIVE ||
+                        engine.engineType == com.example.timeline.engine.preview.PreviewEngineType.VLC_NATIVE
+                    ) "LibVLC 3.5.1 Java API" else "not selected",
+                    "nativeFfmpegPlayerAvailable" to "false",
+                    "media3PrimaryUsed" to (engine.engineType == com.example.timeline.engine.preview.PreviewEngineType.MEDIA3_FALLBACK).toString(),
                     "firstFrameRendered" to engine.firstFrameRendered.collectAsState().value.toString(),
+                    "lastPlaybackErrorCode" to (playbackFailure?.errorCodeName ?: playbackFailure?.errorCode?.toString() ?: "none"),
+                    "lastPlaybackFailureCategory" to (playbackFailure?.category?.name ?: "none"),
+                    "lastPlaybackMimeType" to (playbackFailure?.mimeType ?: "unknown"),
+                    "lastPlaybackUriContext" to listOfNotNull(playbackFailure?.uriScheme, playbackFailure?.uriAuthority).joinToString(":"),
                     "lastError" to (engine.currentError.collectAsState().value ?: "none")
                 )
                 com.example.ui.DebugPanel(

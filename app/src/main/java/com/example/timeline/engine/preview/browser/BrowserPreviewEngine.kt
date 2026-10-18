@@ -46,7 +46,9 @@ class BrowserPreviewEngine(val context: Context) : PreviewEngine {
     override var onTimeChanged: ((Long) -> Unit)? = null
 
     init {
-        WebView.setWebContentsDebuggingEnabled(true)
+        if (com.example.BuildConfig.DEBUG) {
+            WebView.setWebContentsDebuggingEnabled(true)
+        }
         webView.setBackgroundColor(android.graphics.Color.BLACK)
         webView.settings.apply {
             javaScriptEnabled = true
@@ -151,7 +153,8 @@ class BrowserPreviewEngine(val context: Context) : PreviewEngine {
         sourcePositionMs: Long,
         evaluatedParams: VideoAdjustmentParams?,
         presentationTimeUs: Long,
-        forceSeek: Boolean
+        forceSeek: Boolean,
+        mimeType: String?
     ) {
         _currentState.value = PreviewState.LOADING
         _firstFrameRendered.value = false

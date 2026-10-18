@@ -55,7 +55,8 @@ class NativeCppPreviewEngine : PreviewEngine {
         sourcePositionMs: Long,
         evaluatedParams: VideoAdjustmentParams?,
         presentationTimeUs: Long,
-        forceSeek: Boolean
+        forceSeek: Boolean,
+        mimeType: String?
     ) {
         _currentState.value = PreviewState.LOADING
         _currentError.value = null

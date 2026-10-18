@@ -18,6 +18,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.cancel
 
 class TimelinePreviewController(private val context: Context) {
 
@@ -71,6 +72,8 @@ class TimelinePreviewController(private val context: Context) {
 
     private val scope = CoroutineScope(Dispatchers.Main + Job())
     private var playheadJob: Job? = null
+    private val pendingEngineReleases = mutableSetOf<PreviewEngine>()
+    private var released = false
 
     private var lastEmittedTimeMs: Long = 0
 
@@ -135,50 +138,77 @@ class TimelinePreviewController(private val context: Context) {
         }
     }
 
+    private fun releasePendingEngine(engine: PreviewEngine) {
+        if (pendingEngineReleases.remove(engine)) {
+            engine.onTimeChanged = null
+            engine.release()
+        }
+    }
+
     fun setEngineType(type: PreviewEngineType) {
-        if (previewEngine.engineType == type && type != PreviewEngineType.AUTO) return
-        
+        if (released) return
+        val requestedEngine = resolveRequestedPreviewEngine(type)
+        if (previewEngine.engineType == requestedEngine) return
+
         val wasPlaying = previewEngine.isPlaying
         val oldEngine = previewEngine
-        
+        var candidateEngine: PreviewEngine? = null
+
         try {
             val newEngine = createEngine(context, type)
-            // Load clip first
-            if (activeProject != null && activeClip.value != null && activeAsset.value != null) {
-                val clip = activeClip.value!!
-                val asset = activeAsset.value!!
-                val rat = activeProject!!.settings.getFpsRational()
+            candidateEngine = newEngine
+            // Load the active clip before switching the PlayerView to avoid an empty source flash.
+            val project = activeProject
+            val clip = activeClip.value
+            val asset = activeAsset.value
+            if (project != null && clip != null && asset != null) {
+                val rate = project.settings.getFpsRational()
                 val sourceFrame = TimelineFrameResolver.resolveSourceFrame(lastPlayheadFrame, clip)
-                val sourcePositionUs = TimelineFrameResolver.convertFrameToMicroseconds(sourceFrame, rat.numerator, rat.denominator)
-                val sourcePositionMs = sourcePositionUs / 1000
-                val (playableUri, useProxy) = PreviewSourceResolver.resolvePlayableUri(asset, preferProxy = preferProxyPlayback)
-                val evaluatedParams = evaluatedPreviewParams(activeProject!!, lastPlayheadFrame)
-                
-                if (!playableUri.isNullOrBlank()) {
-                    newEngine.loadMedia(playableUri, useProxy, sourcePositionMs, evaluatedParams, sourcePositionUs)
+                val sourcePositionUs = TimelineFrameResolver.convertFrameToMicroseconds(
+                    sourceFrame,
+                    rate.numerator,
+                    rate.denominator
+                )
+                val sourcePositionMs = sourcePositionUs / 1_000L
+                val source = PreviewSourceResolver.resolveSource(asset, preferProxy = preferProxyPlayback)
+                val evaluatedParams = evaluatedPreviewParams(project, lastPlayheadFrame)
+
+                if (source != null) {
+                    newEngine.setVolume(clip.volume)
+                    newEngine.setSource(
+                        source = source,
+                        sourcePositionMs = sourcePositionMs,
+                        evaluatedParams = evaluatedParams,
+                        presentationTimeUs = sourcePositionUs,
+                        forceSeek = true
+                    )
                 }
             }
-            // Once ready, switch
-            previewEngine = newEngine
+
             setupEngineListeners(newEngine)
+            previewEngine = newEngine
+            candidateEngine = null
             _engineTypeFlow.value = newEngine.engineType
-            
-            if (wasPlaying) {
-                newEngine.play()
-            }
-            // Now release old engine safely
+
+            if (wasPlaying) newEngine.play()
+
+            // Keep the old surface alive for one short handoff; the owner tracks it so a scope
+            // cancellation before this coroutine starts cannot leak the old player.
+            pendingEngineReleases += oldEngine
             scope.launch {
-                delay(200) // gentle delay to prevent black flash
-                oldEngine.release()
+                try {
+                    delay(200)
+                } finally {
+                    releasePendingEngine(oldEngine)
+                }
             }
         } catch (e: Exception) {
+            candidateEngine?.release()
             if (com.example.BuildConfig.DEBUG) {
                 android.util.Log.e("TimelinePreviewController", "Failed to switch engine to $type", e)
             }
         }
     }
-
-
 
     fun loadProject(project: TimelineProject) {
         activeProject = project
@@ -227,21 +257,20 @@ class TimelinePreviewController(private val context: Context) {
 
         val evaluatedParams = evaluatedPreviewParams(project, playheadFrame)
 
-        // Prefer a ready proxy for editor playback. The proxy is generated at a predictable
-        // preview resolution and retains the source frame rate, so timeline timecode/audio sync
-        // continue to use the same source-time mapping.
-        val (uriToUse, useProxy) = PreviewSourceResolver.resolvePlayableUri(asset, preferProxy = preferProxyPlayback)
+        // Prefer a ready proxy for editor playback. Source MIME is passed through so Media3 can
+        // select the right extractor for opaque SAF/content URIs and report useful failures.
+        val source = PreviewSourceResolver.resolveSource(asset, preferProxy = preferProxyPlayback)
 
-        if (uriToUse.isNullOrBlank()) {
-            val eng = previewEngine
-            if (eng is Media3FallbackPreviewEngine) eng.clearMedia()
+        if (source == null) {
+            val engine = previewEngine
+            if (engine is Media3FallbackPreviewEngine) engine.clearMedia()
         } else {
-            previewEngine.loadMedia(
-                uriToUse,
-                useProxy,
-                sourcePositionMs,
-                evaluatedParams,
-                sourcePositionUs,
+            previewEngine.setVolume(topClip.volume)
+            previewEngine.setSource(
+                source = source,
+                sourcePositionMs = sourcePositionMs,
+                evaluatedParams = evaluatedParams,
+                presentationTimeUs = sourcePositionUs,
                 forceSeek = forceSeek || prevClipId != topClip.id
             )
         }
@@ -290,6 +319,15 @@ class TimelinePreviewController(private val context: Context) {
     }
 
     fun release() {
+        if (released) return
+        released = true
+        onPlayheadAdvanced = null
+        onPlaybackEnded = null
+        playheadJob?.cancel()
+        playheadJob = null
+        scope.cancel()
+        pendingEngineReleases.toList().forEach(::releasePendingEngine)
+        previewEngine.onTimeChanged = null
         previewEngine.release()
     }
 

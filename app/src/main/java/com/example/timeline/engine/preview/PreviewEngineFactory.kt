@@ -2,26 +2,32 @@ package com.example.timeline.engine.preview
 
 import android.content.Context
 
+/** Keeps the route policy pure and testable without constructing Android players. */
+internal fun resolveRequestedPreviewEngine(type: PreviewEngineType): PreviewEngineType =
+    if (type == PreviewEngineType.AUTO) PreviewEngineType.MEDIA3_FALLBACK else type
+
 object PreviewEngineFactory {
     fun createEngine(context: Context, type: PreviewEngineType = PreviewEngineType.AUTO): PreviewEngine {
-        val targetType = if (type == PreviewEngineType.AUTO) PreviewEngineType.FFMPEG_NATIVE else type
+        val targetType = resolveRequestedPreviewEngine(type)
 
         when (targetType) {
             PreviewEngineType.FFMPEG_NATIVE,
             PreviewEngineType.VLC_NATIVE -> {
                 if (isRunningUnderRobolectric(context)) {
-                    if (com.example.BuildConfig.DEBUG) android.util.Log.d("PreviewEngineFactory", "Using Media3 in Robolectric; LibVLC is not loaded in JVM tests")
-                    return com.example.timeline.engine.preview.Media3FallbackPreviewEngine(context)
+                    if (com.example.BuildConfig.DEBUG) {
+                        android.util.Log.d("PreviewEngineFactory", "Using Media3 in Robolectric; LibVLC is not loaded in JVM tests")
+                    }
+                    return Media3FallbackPreviewEngine(context)
                 }
-                val nativeEngine = createLibVlcEngine(context, targetType)
-                if (nativeEngine != null) return nativeEngine
+                val libVlcEngine = createLibVlcEngine(context, targetType)
+                if (libVlcEngine != null) return libVlcEngine
                 if (com.example.BuildConfig.DEBUG) {
-                    android.util.Log.d("PreviewEngineFactory", "LibVLC unavailable; falling back to Media3")
+                    android.util.Log.d("PreviewEngineFactory", "LibVLC is unavailable; using Media3 ExoPlayer")
                 }
-                return com.example.timeline.engine.preview.Media3FallbackPreviewEngine(context)
+                return Media3FallbackPreviewEngine(context)
             }
             PreviewEngineType.MEDIA3_FALLBACK -> {
-                return com.example.timeline.engine.preview.Media3FallbackPreviewEngine(context)
+                return Media3FallbackPreviewEngine(context)
             }
             PreviewEngineType.STILL_FRAME -> {
                 return StillFramePreviewEngine(context)
@@ -32,10 +38,12 @@ object PreviewEngineFactory {
             PreviewEngineType.NATIVE_CPP -> {
                 return com.example.timeline.engine.preview.native.NativeCppPreviewEngine()
             }
-            else -> {}
+            PreviewEngineType.PROXY_PREVIEW -> {
+                // Proxy is a source-selection policy, not a distinct decoder. AUTO/Media3 handles it.
+                return Media3FallbackPreviewEngine(context)
+            }
+            PreviewEngineType.AUTO -> error("AUTO must be resolved to a concrete engine")
         }
-        
-        return StillFramePreviewEngine(context)
     }
 
     private fun isRunningUnderRobolectric(context: Context): Boolean = runCatching {
@@ -48,7 +56,7 @@ object PreviewEngineFactory {
             com.example.timeline.engine.preview.native.NativeVlcPreviewEngine(context, type)
         }.onFailure { error ->
             if (com.example.BuildConfig.DEBUG) {
-                android.util.Log.e("PreviewEngineFactory", "LibVLC initialization failed", error)
+                android.util.Log.e("PreviewEngineFactory", "LibVLC playback fallback initialization failed", error)
             }
         }.getOrNull() ?: return null
 

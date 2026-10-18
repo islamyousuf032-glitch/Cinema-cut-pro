@@ -2,15 +2,15 @@
 
 Cinema Cut Pro is a native Android video-editor prototype built with Kotlin, Jetpack Compose, and a small C++/JNI layer. The repository contains substantial editor, timeline, color, media, and export code, but these subsystems are at different completion levels.
 
-> **Current status:** prototype / active development. A bounded Media3 adapter now implements single-clip, constant-frame-rate H.264/MP4 export (trim/resize, with compatible embedded AAC where present) and rejects edits it cannot render. The Android/Kotlin path and an actual device-produced MP4 have not yet been build- or device-verified here. Multi-layer compositing, complete C++-to-export integration, multitrack audio, color grading, and HDR still need implementation and validation. See [the source review](docs/PROJECT_REVIEW.md) and [development roadmap](docs/ROADMAP.md).
+> **Current status:** prototype / active development. `AUTO` preview now routes to Media3 ExoPlayer for standard Android-compatible media; the existing LibVLC 3.5.1 Java API remains an explicit manual fallback. A bounded Media3 Transformer adapter supports trims in a sequential, single-visible-video-track H.264/MP4 export with strict validation and cancellation, but it is not a full NLE renderer. This integration still needs CI build/test and target-device validation with representative media and Logcat. Format support depends on Android platform extractors/decoders; there is no universal-format or `.mcraw` support claim. Multi-layer compositing, full color-grade export, multitrack audio, crossfades, and HDR are not implemented by this path. See [preview/export scope and validation](docs/MEDIA3_PREVIEW_AND_EXPORT.md), [the source review](docs/PROJECT_REVIEW.md), and [development roadmap](docs/ROADMAP.md).
 
 ## What is in the codebase
 
 - Portrait editor and a separate landscape advanced-timeline workspace.
 - Project, track, clip, edit-command, undo/redo, autosave, and versioning models.
-- Media import/analysis, preview-engine adapters, and proxy-generation scaffolding.
+- Media import/analysis, Media3 ExoPlayer primary preview with SAF/MIME-aware source handling, explicit legacy LibVLC fallback, and proxy-generation scaffolding.
 - Transform/keyframe and color-adjustment/color-grade models and UI.
-- A bounded Media3 H.264/MP4 single-clip export adapter; the other export paths remain experimental, and none has been production- or device-verified in this sandbox.
+- A bounded Media3 Transformer H.264/MP4 cut-only export adapter for compatible contiguous CFR clips on one visible video track; it trims, validates unsupported edits, reports progress, and supports cancellation. Crossfades and broader NLE compositions are not implemented. It remains unverified on target devices.
 - A Gemini text endpoint intended for color-grading advice. This is **not** a text-to-video or video-generation model.
 
 ## Project layout
@@ -70,6 +70,7 @@ GEMINI_API_KEY=your_key_here
 ## Documentation
 
 - [Source review and architecture map](docs/PROJECT_REVIEW.md)
+- [Media3 preview/export scope and validation notes](docs/MEDIA3_PREVIEW_AND_EXPORT.md)
 - [Prioritized development roadmap](docs/ROADMAP.md)
 - [Documentation index](docs/README.md)
 - [Imported source archive notes](archives/README.md)

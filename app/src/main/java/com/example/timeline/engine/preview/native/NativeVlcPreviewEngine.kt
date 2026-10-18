@@ -53,6 +53,7 @@ class NativeVlcPreviewEngine(
     @Volatile private var videoOutputReady = false
     @Volatile private var initialPositionMs = 0L
     @Volatile private var lastWarmupTimeMs: Long? = null
+    @Volatile private var requestedVolumePercent: Int = 100
     private var pauseAfterFrameRunnable: Runnable? = null
     private var firstFrameWatchdogRunnable: Runnable? = null
 
@@ -207,7 +208,8 @@ class NativeVlcPreviewEngine(
         sourcePositionMs: Long,
         evaluatedParams: VideoAdjustmentParams?,
         presentationTimeUs: Long,
-        forceSeek: Boolean
+        forceSeek: Boolean,
+        mimeType: String?
     ) {
         val vlc = libvlc ?: return
         val player = mediaPlayer ?: return
@@ -277,9 +279,9 @@ class NativeVlcPreviewEngine(
         val wasWarmingUp = pauseAfterFirstFrame
         cancelPauseAfterFirstFrame()
         mediaPlayer?.let { player ->
-            if (wasWarmingUp) {
-                player.setVolume(100)
-                if (player.time != initialPositionMs) player.time = initialPositionMs
+            player.setVolume(requestedVolumePercent)
+            if (wasWarmingUp && player.time != initialPositionMs) {
+                player.time = initialPositionMs
             }
             player.play()
         }
@@ -298,7 +300,13 @@ class NativeVlcPreviewEngine(
     }
 
     override fun setPlaybackSpeed(speed: Float) {
-        mediaPlayer?.rate = speed
+        if (speed.isFinite() && speed > 0f) mediaPlayer?.rate = speed
+    }
+
+    override fun setVolume(volume: Float) {
+        if (!volume.isFinite()) return
+        requestedVolumePercent = (volume.coerceIn(0f, 1f) * 100f).toInt()
+        if (!pauseAfterFirstFrame) mediaPlayer?.setVolume(requestedVolumePercent)
     }
 
     override fun setResolutionFallback(resolutionMode: String) {

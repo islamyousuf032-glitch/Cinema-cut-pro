@@ -10,20 +10,37 @@ object PreviewSourceResolver {
         val hasProxy = asset.proxyInfo != null && asset.proxyStatus == ProxyStatus.READY
         val isDirectFailed = asset.previewStatus == PreviewStatus.DIRECT_FAILED_RUNTIME
         val useProxy = hasProxy && (preferProxy || isDirectFailed)
-        
+
         if (useProxy) {
             return Pair(asset.proxyInfo!!.uriString, true)
         }
-        
+
         val localOriginalUriString = asset.localOriginalUriString
         val originalUriString = asset.originalUriString
-        
-        val uriToUse = if (localOriginalUriString != null) {
+
+        val uriToUse = if (!localOriginalUriString.isNullOrBlank()) {
             localOriginalUriString
         } else {
             originalUriString
         }
-        
+
         return Pair(uriToUse, false)
+    }
+
+    fun resolveSource(asset: MediaAsset, preferProxy: Boolean): PreviewMediaSource? {
+        val (uri, useProxy) = resolvePlayableUri(asset, preferProxy)
+        if (uri.isNullOrBlank()) return null
+
+        val mimeType = if (useProxy) {
+            asset.proxyInfo?.proxyMimeType
+        } else {
+            asset.mimeType
+        }
+
+        return PreviewMediaSource(
+            uri = uri,
+            mimeType = mimeType,
+            isProxy = useProxy
+        )
     }
 }

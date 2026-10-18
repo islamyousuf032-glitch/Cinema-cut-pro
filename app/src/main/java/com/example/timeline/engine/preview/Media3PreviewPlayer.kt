@@ -3,20 +3,28 @@ package com.example.timeline.engine.preview
 import android.content.Context
 import android.net.Uri
 import android.view.Surface
+import androidx.media3.common.AudioAttributes
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.analytics.AnalyticsListener
+import com.example.model.adjustments.VideoAdjustmentParams
 import com.example.model.adjustments.engine.VideoEffectGraph
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.delay
-import com.example.model.adjustments.VideoAdjustmentParams
+import java.util.concurrent.atomic.AtomicBoolean
 
 @OptIn(UnstableApi::class)
 class Media3FallbackPreviewEngine(context: Context) : PreviewEngine {
@@ -37,20 +45,28 @@ class Media3FallbackPreviewEngine(context: Context) : PreviewEngine {
     
     private val _currentError = MutableStateFlow<String?>(null)
     override val currentError: StateFlow<String?> = _currentError.asStateFlow()
-    
+
+    private val _currentPlaybackFailure = MutableStateFlow<PreviewPlaybackFailure?>(null)
+    override val currentPlaybackFailure: StateFlow<PreviewPlaybackFailure?> = _currentPlaybackFailure.asStateFlow()
+
     private val _firstFrameRendered = MutableStateFlow(false)
     override val firstFrameRendered: StateFlow<Boolean> = _firstFrameRendered.asStateFlow()
-    
-    val exoPlayer: ExoPlayer = ExoPlayer.Builder(context).build()
-    private val effectGraph = VideoEffectGraph(context)
+
+    private val appContext = context.applicationContext
+    val exoPlayer: ExoPlayer = ExoPlayer.Builder(appContext)
+        .setHandleAudioBecomingNoisy(true)
+        .build()
+    private val effectGraph = VideoEffectGraph(appContext)
     private val _playbackMetrics = MutableStateFlow(PreviewPlaybackMetrics())
     val playbackMetrics: StateFlow<PreviewPlaybackMetrics> = _playbackMetrics.asStateFlow()
-    
+
     // For legacy compat in codebase
     private val _state = MutableStateFlow(PreviewPlayerState())
     val state: StateFlow<PreviewPlayerState> = _state.asStateFlow()
 
     private var currentUri: String? = null
+    private var currentMimeType: String? = null
+    private val released = AtomicBoolean(false)
 
     override var onTimeChanged: ((Long) -> Unit)? = null
 
@@ -58,20 +74,35 @@ class Media3FallbackPreviewEngine(context: Context) : PreviewEngine {
     private var pausedGradeRefreshJob: kotlinx.coroutines.Job? = null
     private var pausedGradeRefreshPositionMs = 0L
     private var lastPausedGradeRefreshMs = 0L
-    private val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main + kotlinx.coroutines.SupervisorJob())
+    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
     init {
+        exoPlayer.setAudioAttributes(
+            AudioAttributes.Builder()
+                .setUsage(C.USAGE_MEDIA)
+                .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+                .build(),
+            /* handleAudioFocus= */ true
+        )
         exoPlayer.addListener(object : Player.Listener {
+            override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                _currentPlaybackFailure.value = null
+                _currentError.value = null
+            }
+
             override fun onRenderedFirstFrame() {
                 if (com.example.BuildConfig.DEBUG) android.util.Log.d("PLAYER_MEDIA3", "onRenderedFirstFrame called")
                 _firstFrameRendered.value = true
             }
             override fun onPlaybackStateChanged(playbackState: Int) {
+                val failure = exoPlayer.playerError?.let(::toPlaybackFailure)
+                if (failure != null) {
+                    _currentPlaybackFailure.value = failure
+                    _currentError.value = failure.toUserMessage()
+                }
                 _state.update { it.copy(
                     isReady = playbackState == Player.STATE_READY,
-                    error = if (playbackState == Player.STATE_IDLE && exoPlayer.playerError != null) {
-                        exoPlayer.playerError?.message ?: "Playback Error"
-                    } else it.error
+                    error = failure?.toUserMessage() ?: it.error
                 )}
                 when (playbackState) {
                     Player.STATE_BUFFERING -> _currentState.value = PreviewState.LOADING
@@ -85,7 +116,6 @@ class Media3FallbackPreviewEngine(context: Context) : PreviewEngine {
                     }
                     Player.STATE_IDLE -> {
                         if (exoPlayer.playerError != null) {
-                            _currentError.value = exoPlayer.playerError?.message
                             _currentState.value = PreviewState.ERROR
                         }
                     }
@@ -104,9 +134,11 @@ class Media3FallbackPreviewEngine(context: Context) : PreviewEngine {
                 }
             }
 
-            override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
-                _state.update { it.copy(error = error.message) }
-                _currentError.value = error.message
+            override fun onPlayerError(error: PlaybackException) {
+                val failure = toPlaybackFailure(error)
+                _currentPlaybackFailure.value = failure
+                _currentError.value = failure.toUserMessage()
+                _state.update { it.copy(error = failure.toUserMessage(), isReady = false, isPlaying = false) }
                 _currentState.value = PreviewState.ERROR
                 stopTimeTracker()
             }
@@ -164,12 +196,78 @@ class Media3FallbackPreviewEngine(context: Context) : PreviewEngine {
             exoPlayer.setVideoEffects(effectGraph.getEffects())
             if (com.example.BuildConfig.DEBUG) android.util.Log.d("PLAYER_MEDIA3", "Enabled shared GLSL color effect for preview")
         } catch (e: Exception) {
-            _currentError.value = "GPU color grading could not initialize: ${e.message ?: e.javaClass.simpleName}"
+            val failure = PreviewPlaybackFailure(
+                engineType = engineType,
+                uriScheme = null,
+                uriAuthority = null,
+                mimeType = null,
+                errorCode = null,
+                message = "GPU color grading could not initialize",
+                causeType = e.javaClass.simpleName,
+                causeMessage = e.message
+            )
+            _currentPlaybackFailure.value = failure
+            _currentError.value = failure.toUserMessage()
             _currentState.value = PreviewState.ERROR
             if (com.example.BuildConfig.DEBUG) android.util.Log.e("Media3PreviewPlayer", "Failed to initialize the video effect graph", e)
         }
     }
-    
+
+    private fun sanitizeSourceDetail(detail: String?, sourceUri: Uri?): String? {
+        if (detail == null) return null
+        var sanitized = detail
+        if (sourceUri != null) {
+            val safeContext = when {
+                sourceUri.scheme.isNullOrBlank() -> "source"
+                sourceUri.authority.isNullOrBlank() -> "${sourceUri.scheme} URI"
+                else -> "${sourceUri.scheme}://${sourceUri.authority}"
+            }
+            sourceUri.toString().takeIf(String::isNotBlank)?.let { rawUri ->
+                sanitized = sanitized.replace(rawUri, safeContext)
+            }
+            sourceUri.path?.takeIf(String::isNotBlank)?.let { path ->
+                sanitized = sanitized.replace(path, "[source path]")
+            }
+        }
+        return sanitized.take(512)
+    }
+
+    private fun toPlaybackFailure(error: PlaybackException): PreviewPlaybackFailure {
+        val sourceUri = currentUri?.let { runCatching { Uri.parse(it) }.getOrNull() }
+        val category = when (error.errorCode) {
+            PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED,
+            PlaybackException.ERROR_CODE_PARSING_MANIFEST_UNSUPPORTED,
+            PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES,
+            PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED ->
+                PreviewPlaybackFailureCategory.UNSUPPORTED_MEDIA
+            PlaybackException.ERROR_CODE_DRM_UNSPECIFIED,
+            PlaybackException.ERROR_CODE_DRM_SCHEME_UNSUPPORTED,
+            PlaybackException.ERROR_CODE_DRM_PROVISIONING_FAILED,
+            PlaybackException.ERROR_CODE_DRM_CONTENT_ERROR,
+            PlaybackException.ERROR_CODE_DRM_LICENSE_ACQUISITION_FAILED,
+            PlaybackException.ERROR_CODE_DRM_DISALLOWED_OPERATION,
+            PlaybackException.ERROR_CODE_DRM_SYSTEM_ERROR,
+            PlaybackException.ERROR_CODE_DRM_DEVICE_REVOKED,
+            PlaybackException.ERROR_CODE_DRM_LICENSE_EXPIRED -> PreviewPlaybackFailureCategory.DRM
+            in 2000..2999 -> PreviewPlaybackFailureCategory.SOURCE_ACCESS
+            in 4000..4999 -> PreviewPlaybackFailureCategory.DECODER
+            in 5000..5999 -> PreviewPlaybackFailureCategory.AUDIO
+            else -> PreviewPlaybackFailureCategory.PLAYBACK
+        }
+        return PreviewPlaybackFailure(
+            engineType = engineType,
+            uriScheme = sourceUri?.scheme,
+            uriAuthority = sourceUri?.authority,
+            mimeType = currentMimeType,
+            errorCode = error.errorCode,
+            message = sanitizeSourceDetail(error.message, sourceUri) ?: error.javaClass.simpleName,
+            causeType = error.cause?.javaClass?.simpleName,
+            causeMessage = sanitizeSourceDetail(error.cause?.message, sourceUri),
+            category = category,
+            errorCodeName = error.errorCodeName
+        )
+    }
+
     private fun startTimeTracker() {
         if (timeTrackerJob?.isActive == true) return
         timeTrackerJob = scope.launch {
@@ -215,7 +313,7 @@ class Media3FallbackPreviewEngine(context: Context) : PreviewEngine {
     }
     
     override fun setSurface(surface: Surface?) {
-        exoPlayer.setVideoSurface(surface)
+        if (!released.get()) exoPlayer.setVideoSurface(surface)
     }
 
     override fun loadMedia(
@@ -224,9 +322,15 @@ class Media3FallbackPreviewEngine(context: Context) : PreviewEngine {
         sourcePositionMs: Long,
         evaluatedParams: VideoAdjustmentParams?,
         presentationTimeUs: Long,
-        forceSeek: Boolean
+        forceSeek: Boolean,
+        mimeType: String?
     ) {
-        if (com.example.BuildConfig.DEBUG) android.util.Log.d("PLAYER_MEDIA3", "Loading media at $sourcePositionMs ms; proxy=$useProxy")
+        if (released.get()) return
+        val safePositionMs = sourcePositionMs.coerceAtLeast(0L)
+        val normalizedMimeType = mimeType?.substringBefore(';')?.trim()?.takeIf(String::isNotBlank)
+        if (com.example.BuildConfig.DEBUG) {
+            android.util.Log.d("PLAYER_MEDIA3", "Loading ${normalizedMimeType ?: "unknown media"} at $safePositionMs ms; proxy=$useProxy")
+        }
         
         if (evaluatedParams != null) {
             // The GlEffect reads this value on Media3's GL thread. The effect parameters are
@@ -234,9 +338,10 @@ class Media3FallbackPreviewEngine(context: Context) : PreviewEngine {
             effectGraph.setParams(evaluatedParams)
         }
         
-        if (currentUri == uriString) {
+        val sameSource = currentUri == uriString && currentMimeType == normalizedMimeType
+        if (sameSource && exoPlayer.playerError == null) {
             val isPlaying = exoPlayer.isPlaying
-            val positionDeltaMs = kotlin.math.abs(exoPlayer.currentPosition - sourcePositionMs)
+            val positionDeltaMs = kotlin.math.abs(exoPlayer.currentPosition - safePositionMs)
             // Project/grade state can change many times per second while playing. Only seek for
             // a real playhead jump then; routine slider updates just replace shader uniforms.
             val seekThresholdMs = if (isPlaying) 300L else 80L
@@ -244,12 +349,12 @@ class Media3FallbackPreviewEngine(context: Context) : PreviewEngine {
             val needsPausedGradeRefresh = !isPlaying && evaluatedParams != null
             if (positionNeedsSeek) {
                 cancelPausedGradeRefresh()
-                exoPlayer.seekTo(sourcePositionMs)
+                exoPlayer.seekTo(safePositionMs)
                 lastPausedGradeRefreshMs = android.os.SystemClock.elapsedRealtime()
             } else if (needsPausedGradeRefresh) {
                 // Coalesce high-frequency slider updates to at most ~30 refresh seeks/sec. The
                 // shader parameters are updated immediately; each rendered frame uses the latest.
-                requestPausedGradeRefresh(sourcePositionMs)
+                requestPausedGradeRefresh(safePositionMs)
             }
             val isReady = exoPlayer.playbackState == Player.STATE_READY
             _state.update { it.copy(usingProxy = useProxy, isReady = isReady) }
@@ -263,32 +368,63 @@ class Media3FallbackPreviewEngine(context: Context) : PreviewEngine {
         _playbackMetrics.value = PreviewPlaybackMetrics()
         _currentState.value = PreviewState.LOADING
         currentUri = uriString
+        currentMimeType = normalizedMimeType
+        _currentError.value = null
+        _currentPlaybackFailure.value = null
         _firstFrameRendered.value = false
         _state.update { it.copy(error = null, usingProxy = useProxy, isReady = false) }
-        
-        val mediaItem = MediaItem.fromUri(Uri.parse(uriString))
-        exoPlayer.setMediaItem(mediaItem, sourcePositionMs)
-        exoPlayer.prepare()
+
+        try {
+            val mediaItemBuilder = MediaItem.Builder().setUri(Uri.parse(uriString))
+            normalizedMimeType?.let(mediaItemBuilder::setMimeType)
+            exoPlayer.setMediaItem(mediaItemBuilder.build(), safePositionMs)
+            exoPlayer.prepare()
+        } catch (error: Exception) {
+            val sourceUri = runCatching { Uri.parse(uriString) }.getOrNull()
+            val failure = PreviewPlaybackFailure(
+                engineType = engineType,
+                uriScheme = sourceUri?.scheme,
+                uriAuthority = sourceUri?.authority,
+                mimeType = normalizedMimeType,
+                errorCode = null,
+                message = "Media source could not be opened",
+                causeType = error.javaClass.simpleName,
+                causeMessage = sanitizeSourceDetail(error.message, sourceUri),
+                category = if (sourceUri?.scheme == "content" || sourceUri?.scheme == "file") {
+                    PreviewPlaybackFailureCategory.SOURCE_ACCESS
+                } else {
+                    PreviewPlaybackFailureCategory.PLAYBACK
+                }
+            )
+            _currentPlaybackFailure.value = failure
+            _currentError.value = failure.toUserMessage()
+            _state.update { it.copy(error = failure.toUserMessage(), isReady = false, isPlaying = false) }
+            _currentState.value = PreviewState.ERROR
+            stopTimeTracker()
+        }
     }
 
     fun clearMedia() {
-        if (currentUri == null) return
+        if (released.get()) return
         cancelPausedGradeRefresh()
         currentUri = null
+        currentMimeType = null
+        _currentError.value = null
+        _currentPlaybackFailure.value = null
+        _firstFrameRendered.value = false
         exoPlayer.clearMediaItems()
-        _state.update { it.copy(error = null, usingProxy = false, isReady = false) }
+        _state.update { it.copy(error = null, usingProxy = false, isReady = false, isPlaying = false) }
         _currentState.value = PreviewState.IDLE
     }
 
     override fun play() {
+        if (released.get()) return
         cancelPausedGradeRefresh()
-        if (currentUri != null) {
-            exoPlayer.play()
-        }
+        if (currentUri != null) exoPlayer.play()
     }
 
     override fun pause() {
-        exoPlayer.pause()
+        if (!released.get()) exoPlayer.pause()
     }
 
     fun togglePlayPause() {
@@ -296,26 +432,40 @@ class Media3FallbackPreviewEngine(context: Context) : PreviewEngine {
     }
     
     override fun seekTo(timeUs: Long) {
+        if (released.get()) return
         cancelPausedGradeRefresh()
-        exoPlayer.seekTo(timeUs / 1000)
+        exoPlayer.seekTo((timeUs.coerceAtLeast(0L)) / 1000L)
     }
 
     override fun setPlaybackSpeed(speed: Float) {
-        exoPlayer.setPlaybackSpeed(speed)
+        require(speed.isFinite() && speed > 0f) {
+            "Playback speed must be finite and greater than zero."
+        }
+        if (!released.get()) exoPlayer.setPlaybackSpeed(speed)
+    }
+
+    override fun setVolume(volume: Float) {
+        if (released.get()) return
+        exoPlayer.volume = if (volume.isFinite()) volume.coerceIn(0f, 1f) else 1f
     }
 
     override fun setResolutionFallback(resolutionMode: String) {
-        // Fallback or specific player property
+        // Resolution selection is handled by the timeline's proxy/source policy.
     }
 
     override fun release() {
+        if (!released.compareAndSet(false, true)) return
         cancelPausedGradeRefresh()
         stopTimeTracker()
-        effectGraph.release()
+        scope.cancel()
         exoPlayer.release()
+        effectGraph.release()
+        _currentState.value = PreviewState.IDLE
     }
-    
-    override val currentPositionUs: Long get() = exoPlayer.currentPosition * 1000
-    override val durationUs: Long get() = exoPlayer.duration * 1000
-    override val isPlaying: Boolean get() = exoPlayer.isPlaying
+
+    override val currentPositionUs: Long
+        get() = if (released.get()) 0L else exoPlayer.currentPosition.coerceAtLeast(0L) * 1000L
+    override val durationUs: Long
+        get() = if (released.get()) 0L else exoPlayer.duration.takeIf { it >= 0L }?.times(1000L) ?: 0L
+    override val isPlaying: Boolean get() = !released.get() && exoPlayer.isPlaying
 }

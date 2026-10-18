@@ -44,9 +44,9 @@ fun ViewportSettingsMenu(
             Spacer(modifier = Modifier.height(16.dp))
 
             SectionHeader("Playback Engine")
-            EngineOption(PreviewEngineType.AUTO, settings.selectedEngine, onEngineSelected, "LibVLC first; Media3 fallback on decode failure")
-            EngineOption(PreviewEngineType.FFMPEG_NATIVE, settings.selectedEngine, onEngineSelected, "LibVLC 3.5.1; FFmpeg decoding is inside LibVLC")
-            EngineOption(PreviewEngineType.MEDIA3_FALLBACK, settings.selectedEngine, onEngineSelected, "Media3 hardware decode and live GPU grading")
+            EngineOption(PreviewEngineType.AUTO, settings.selectedEngine, onEngineSelected, "Media3 ExoPlayer is primary for standard Android media")
+            EngineOption(PreviewEngineType.MEDIA3_FALLBACK, settings.selectedEngine, onEngineSelected, "Select Media3 ExoPlayer directly")
+            EngineOption(PreviewEngineType.FFMPEG_NATIVE, settings.selectedEngine, onEngineSelected, "Manual LibVLC 3.5.1 playback fallback; not an FFmpeg/C++ engine")
             EngineOption(PreviewEngineType.BROWSER, settings.selectedEngine, onEngineSelected, "WebView-based playback")
             EngineOption(PreviewEngineType.STILL_FRAME, settings.selectedEngine, onEngineSelected, "Still-frame preview only")
 

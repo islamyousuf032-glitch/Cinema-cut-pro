@@ -88,13 +88,22 @@ fun AdvancedTimelineEntryScreen(
         )
     } else {
         val timelinePreviewController = remember { TimelinePreviewController(context) }
-        
-        DisposableEffect(timelinePreviewController) {
+        val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+
+        DisposableEffect(timelinePreviewController, lifecycleOwner, timelineViewModel) {
+            val lifecycleObserver = androidx.lifecycle.LifecycleEventObserver { _, event ->
+                if (event == androidx.lifecycle.Lifecycle.Event.ON_PAUSE) {
+                    timelinePreviewController.pause()
+                    timelineViewModel.pausePlay()
+                }
+            }
+            lifecycleOwner.lifecycle.addObserver(lifecycleObserver)
             timelinePreviewController.onPlayheadAdvanced = { newFrame ->
                 editorViewModel.updatePlayheadFrame(newFrame)
                 timelineViewModel.setPlayheadFrame(newFrame)
             }
-            onDispose { 
+            onDispose {
+                lifecycleOwner.lifecycle.removeObserver(lifecycleObserver)
                 timelinePreviewController.onPlayheadAdvanced = null
                 timelinePreviewController.release()
             }
