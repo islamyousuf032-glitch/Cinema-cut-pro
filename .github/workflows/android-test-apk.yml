@@ -1,0 +1,168 @@
+name: Build and release Android test APK
+
+on:
+  push:
+    branches:
+      - arena/a2d6ebb0-cinema-cut-pro
+  workflow_dispatch:
+    inputs:
+      publish_test_release:
+        description: Publish the tested APK as a GitHub pre-release
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  build-test-release:
+    name: Build, test, and publish installable APK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7.0.1
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v6.0.1
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4.0.4
+
+      - name: Install Android build components
+        run: |
+          sdkmanager --install \
+            "platforms;android-36" \
+            "platforms;android-36.1" \
+            "build-tools;36.0.0" \
+            "cmake;3.22.1" \
+            "ndk;27.2.12479018"
+
+      - name: Set up Gradle caching
+        uses: gradle/actions/setup-gradle@v6.4.0
+
+      - name: Build debug APK and run JVM tests
+        shell: bash
+        run: |
+          set -o pipefail
+          ./gradlew --no-daemon --stacktrace :app:assembleDebug :app:testDebugUnitTest 2>&1 | tee gradle-build.log
+
+      - name: Surface Gradle failure details
+        if: failure()
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          log = Path("gradle-build.log")
+          if not log.exists():
+              raise SystemExit(0)
+          lines = log.read_text(errors="replace").splitlines()
+          pattern = re.compile(
+              r"FAILURE:|What went wrong:|Execution failed for task|"
+              r"Caused by:|Could not resolve|Unresolved reference|"
+              r"^e: |error:|Internal error|Exception is:|BUILD FAILED|"
+              r"Test process|Test Executor|There were failing tests|AssertionError|"
+              r"tests? completed|tests? failed|No tests found",
+              re.IGNORECASE,
+          )
+          matches = [line for line in lines if pattern.search(line)]
+          context = []
+          for index, line in enumerate(lines):
+              if re.search(r"Test process encountered|Gradle Test Executor|There were failing tests", line, re.IGNORECASE):
+                  context.extend(lines[max(0, index - 4):min(len(lines), index + 18)])
+          excerpt = list(dict.fromkeys((matches[-45:] if matches else lines[-60:]) + context))
+
+          test_failures = []
+          junit_reports = sorted(Path("app/build/test-results").rglob("*.xml"))
+          for report_path in junit_reports:
+              try:
+                  root = ET.parse(report_path).getroot()
+              except ET.ParseError:
+                  continue
+              for case in root.iter("testcase"):
+                  for tag in ("failure", "error"):
+                      failure = case.find(tag)
+                      if failure is not None:
+                          detail = failure.get("message") or failure.get("type") or tag
+                          body = "".join(failure.itertext()).strip()
+                          test_failures.append(f"{case.get('classname', '?')}#{case.get('name', '?')}: {detail}\n{body[:1500]}")
+          if not test_failures and re.search(r"\d+ tests? completed, \d+ failed", "\n".join(lines), re.IGNORECASE):
+              report_names = ", ".join(str(path) for path in junit_reports[:30]) or "none found"
+              test_failures.append(f"Gradle reported failing tests, but no JUnit failure entries were parsed. XML reports found: {report_names}")
+
+          report = "Gradle build failure details:\n\n```text\n" + "\n".join(excerpt) + "\n```\n"
+          if test_failures:
+              report += "\nJUnit test failures:\n\n```text\n" + "\n\n".join(test_failures[:20]) + "\n```\n"
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write(report)
+          if test_failures:
+              # Put test names first so GitHub's annotation-length limit cannot truncate them.
+              message = "JUnit test failures:\n" + "\n\n".join(failure[:1200] for failure in test_failures[:4])
+              message += "\n\nGradle summary:\n" + "\n".join(excerpt[:12])
+          else:
+              message = "\n".join(excerpt)
+          message = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+          print(f"::error title=Gradle build failure::{message}")
+          PY
+
+      - name: Upload Gradle log on failure
+        if: failure()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: cinema-cut-pro-gradle-log-${{ github.run_number }}-${{ github.run_attempt }}
+          path: gradle-build.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Run native C++ host tests
+        run: python3 tools/run_native_export_tests.py
+
+      - name: Prepare APK and checksum
+        id: apk
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          apk_name="Cinema-Cut-Pro-debug-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}.apk"
+          cp app/build/outputs/apk/debug/app-debug.apk "dist/${apk_name}"
+          sha256sum "dist/${apk_name}" > "dist/${apk_name}.sha256"
+          echo "name=${apk_name}" >> "$GITHUB_OUTPUT"
+          echo "tag=android-test-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+
+      - name: Save APK as a workflow artifact
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: cinema-cut-pro-test-apk-${{ github.run_number }}-${{ github.run_attempt }}
+          path: |
+            dist/${{ steps.apk.outputs.name }}
+            dist/${{ steps.apk.outputs.name }}.sha256
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish test APK in GitHub Releases
+        if: >-
+          github.ref == 'refs/heads/arena/a2d6ebb0-cinema-cut-pro' &&
+          ((github.event_name == 'workflow_dispatch' && inputs.publish_test_release == true) ||
+           (github.event_name == 'push' && contains(github.event.head_commit.message, '[publish-test-release]')))
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APK_NAME: ${{ steps.apk.outputs.name }}
+          TAG_NAME: ${{ steps.apk.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release create "$TAG_NAME" \
+            --target "$GITHUB_SHA" \
+            --title "Cinema Cut Pro Android test APK #${GITHUB_RUN_NUMBER}" \
+            --notes "Installable debug-signed test build from commit ${GITHUB_SHA}. This APK is for device testing and is not a Play Store release. SHA-256 checksum is attached." \
+            --prerelease \
+            "dist/${APK_NAME}#Installable Android test APK" \
+            "dist/${APK_NAME}.sha256#SHA-256 checksum"
