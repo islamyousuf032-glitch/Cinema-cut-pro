@@ -273,9 +273,10 @@ class NativeVlcPreviewEngine(
         val player = mediaPlayer ?: return
         try {
             if (!player.vlcVout.areViewsAttached()) {
-                // Match VideoLAN's player setup: subtitles enabled and the layout's default
-                // SurfaceView retained for the platform video-output path.
-                player.attachViews(layout, null, true, false)
+                // This view is hosted inside Compose graphics/clipping layers. Use a TextureView
+                // so VLC's video participates in normal view composition instead of a separate
+                // SurfaceView window that can be obscured by the transformed Compose canvas.
+                player.attachViews(layout, null, true, true)
             }
             if (com.example.BuildConfig.DEBUG) {
                 android.util.Log.d(
