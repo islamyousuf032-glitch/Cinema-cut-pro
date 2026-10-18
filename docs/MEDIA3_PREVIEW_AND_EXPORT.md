@@ -1,6 +1,6 @@
 # Media3 preview and bounded export
 
-**Integration status:** in progress until CI passes and representative files have been tested on target Android devices. This document describes implemented source scope and known limits; it is not a compatibility guarantee.
+**Integration status:** the Android debug build, JVM tests, and native host tests passed in [GitHub Actions run 39122394286](https://github.com/islamyousuf032-glitch/Cinema-cut-pro/actions/runs/39122394286). Representative media playback/export and Logcat validation on target Android devices remain outstanding. This document describes implemented source scope and known limits; it is not a compatibility guarantee.
 
 ## Playback route
 
