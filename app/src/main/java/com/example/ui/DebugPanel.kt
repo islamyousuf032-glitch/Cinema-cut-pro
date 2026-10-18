@@ -1,9 +1,9 @@
 package com.example.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -25,6 +25,7 @@ fun DebugPanel(
         modifier = modifier
             .fillMaxWidth()
             .heightIn(max = 200.dp)
+            .verticalScroll(rememberScrollState())
             .background(Color.Black.copy(alpha = 0.8f))
             .padding(8.dp)
     ) {
@@ -39,30 +40,28 @@ fun DebugPanel(
         
         Spacer(modifier = Modifier.height(4.dp))
         
-        LazyColumn {
-            items(assets) { asset ->
-                Column(modifier = Modifier.padding(vertical = 4.dp).background(Color.DarkGray).padding(4.dp).fillMaxWidth()) {
-                    Text("ID: ${asset.assetId}", color = Color.Cyan, style = MaterialTheme.typography.labelSmall)
-                    Text("Name: ${asset.displayName}", color = Color.LightGray, style = MaterialTheme.typography.labelSmall)
-                    
-                    val metadata = asset.metadata
-                    val videoStream = metadata.videoStreams.firstOrNull()
-                    
-                    Text("Dimensions: ${metadata.width}x${metadata.height}", color = Color.White, style = MaterialTheme.typography.labelSmall)
-                    Text("MIME: ${asset.mimeType}", color = Color.White, style = MaterialTheme.typography.labelSmall)
-                    
-                    if (videoStream != null) {
-                        Text("Codec: ${videoStream.codecName} Profile: ${videoStream.codecProfile} Level: ${videoStream.codecLevel}", color = Color.Yellow, style = MaterialTheme.typography.labelSmall)
-                        Text("Color Standard: ${videoStream.colorStandard} Transfer: ${videoStream.colorTransfer} Range: ${videoStream.colorRange}", color = Color.Yellow, style = MaterialTheme.typography.labelSmall)
-                    }
-                    
-                    Text("Preview: ${asset.previewStatus} | Proxy: ${asset.proxyStatus} | Error: ${asset.mediaErrorStatus}", color = Color.Green, style = MaterialTheme.typography.labelSmall)
-                    Text("Avail: ${asset.mediaAvailabilityStatus}", color = Color.Magenta, style = MaterialTheme.typography.labelSmall)
-                    
-                    if (onTestVlc != null && asset.localOriginalUriString != null) {
-                        androidx.compose.material3.Button(onClick = { onTestVlc(asset.localOriginalUriString!!) }) {
-                            Text("Test VLC")
-                        }
+        assets.forEach { asset ->
+            Column(modifier = Modifier.padding(vertical = 4.dp).background(Color.DarkGray).padding(4.dp).fillMaxWidth()) {
+                Text("ID: ${asset.assetId}", color = Color.Cyan, style = MaterialTheme.typography.labelSmall)
+                Text("Name: ${asset.displayName}", color = Color.LightGray, style = MaterialTheme.typography.labelSmall)
+
+                val metadata = asset.metadata
+                val videoStream = metadata.videoStreams.firstOrNull()
+
+                Text("Dimensions: ${metadata.width}x${metadata.height}", color = Color.White, style = MaterialTheme.typography.labelSmall)
+                Text("MIME: ${asset.mimeType}", color = Color.White, style = MaterialTheme.typography.labelSmall)
+
+                if (videoStream != null) {
+                    Text("Codec: ${videoStream.codecName} Profile: ${videoStream.codecProfile} Level: ${videoStream.codecLevel}", color = Color.Yellow, style = MaterialTheme.typography.labelSmall)
+                    Text("Color Standard: ${videoStream.colorStandard} Transfer: ${videoStream.colorTransfer} Range: ${videoStream.colorRange}", color = Color.Yellow, style = MaterialTheme.typography.labelSmall)
+                }
+
+                Text("Preview: ${asset.previewStatus} | Proxy: ${asset.proxyStatus} | Error: ${asset.mediaErrorStatus}", color = Color.Green, style = MaterialTheme.typography.labelSmall)
+                Text("Avail: ${asset.mediaAvailabilityStatus}", color = Color.Magenta, style = MaterialTheme.typography.labelSmall)
+
+                if (onTestVlc != null && asset.localOriginalUriString != null) {
+                    androidx.compose.material3.Button(onClick = { onTestVlc(asset.localOriginalUriString!!) }) {
+                        Text("Test VLC")
                     }
                 }
             }

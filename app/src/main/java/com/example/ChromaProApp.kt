@@ -251,9 +251,15 @@ fun ChromaProApp(viewModel: MainViewModel = viewModel()) {
                 val diagnostics = mapOf(
                     "activeEngine" to engine.engineType.name,
                     "previewState" to engine.currentState.collectAsState().value.name,
+                    "activeSource" to if (timelinePreviewController.activeSourceIsProxy.value) "PROXY" else "ORIGINAL",
                     "playing" to engine.isPlaying.toString(),
                     "positionUs" to engine.currentPositionUs.toString(),
                     "durationUs" to engine.durationUs.toString(),
+                    "lastPlaybackErrorCode" to (playbackFailure?.errorCodeName ?: playbackFailure?.errorCode?.toString() ?: "none"),
+                    "lastPlaybackFailureCategory" to (playbackFailure?.category?.name ?: "none"),
+                    "lastPlaybackMimeType" to (playbackFailure?.mimeType ?: "unknown"),
+                    "lastPlaybackUriContext" to listOfNotNull(playbackFailure?.uriScheme, playbackFailure?.uriAuthority).joinToString(":"),
+                    "lastError" to (engine.currentError.collectAsState().value ?: "none"),
                     "media3Decoder" to (media3Metrics?.videoDecoderName ?: "unknown"),
                     "decoderInitMs" to (media3Metrics?.decoderInitializationDurationMs?.toString() ?: "unknown"),
                     "droppedVideoFrames" to (media3Metrics?.droppedVideoFrames?.toString() ?: "unknown"),
@@ -265,12 +271,7 @@ fun ChromaProApp(viewModel: MainViewModel = viewModel()) {
                     ) "LibVLC 3.5.1 Java API" else "not selected",
                     "nativeFfmpegPlayerAvailable" to "false",
                     "media3PrimaryUsed" to (engine.engineType == com.example.timeline.engine.preview.PreviewEngineType.MEDIA3_FALLBACK).toString(),
-                    "firstFrameRendered" to engine.firstFrameRendered.collectAsState().value.toString(),
-                    "lastPlaybackErrorCode" to (playbackFailure?.errorCodeName ?: playbackFailure?.errorCode?.toString() ?: "none"),
-                    "lastPlaybackFailureCategory" to (playbackFailure?.category?.name ?: "none"),
-                    "lastPlaybackMimeType" to (playbackFailure?.mimeType ?: "unknown"),
-                    "lastPlaybackUriContext" to listOfNotNull(playbackFailure?.uriScheme, playbackFailure?.uriAuthority).joinToString(":"),
-                    "lastError" to (engine.currentError.collectAsState().value ?: "none")
+                    "firstFrameRendered" to engine.firstFrameRendered.collectAsState().value.toString()
                 )
                 com.example.ui.DebugPanel(
                     assets = timelineUiState.project.mediaAssets,

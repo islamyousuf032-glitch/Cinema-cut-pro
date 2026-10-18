@@ -109,22 +109,49 @@ class NativeVlcPreviewEngine(
                     val previousWarmupTime = lastWarmupTimeMs
                     lastWarmupTimeMs = event.timeChanged
                     if (videoOutputReady && previousWarmupTime != null && event.timeChanged != previousWarmupTime) {
+                        val isFirstRenderedFrame = !_firstFrameRendered.value
                         _firstFrameRendered.value = true
+                        if (isFirstRenderedFrame && com.example.BuildConfig.DEBUG) {
+                            android.util.Log.d(
+                                "NativeVlcPreviewEngine",
+                                "Paused preview advanced at ${event.timeChanged}ms after video output became ready; viewsAttached=${runCatching { mediaPlayer?.vlcVout?.areViewsAttached() }.getOrDefault(false)}"
+                            )
+                        }
                         cancelFirstFrameWatchdog()
                         if (pauseAfterFrameRunnable == null) schedulePauseAfterFirstFrame()
                     }
                 } else {
-                    if (videoOutputReady) _firstFrameRendered.value = true
+                    if (videoOutputReady && !_firstFrameRendered.value) {
+                        _firstFrameRendered.value = true
+                        if (com.example.BuildConfig.DEBUG) {
+                            android.util.Log.d(
+                                "NativeVlcPreviewEngine",
+                                "Playback advanced at ${event.timeChanged}ms after video output became ready"
+                            )
+                        }
+                    }
                     onTimeChanged?.invoke(event.timeChanged * 1000L)
                 }
             }
             MediaPlayer.Event.EncounteredError -> {
                 cancelPauseAfterFirstFrame()
+                if (com.example.BuildConfig.DEBUG) {
+                    android.util.Log.e(
+                        "NativeVlcPreviewEngine",
+                        "LibVLC reported a playback error; voutReady=$videoOutputReady viewsAttached=${runCatching { mediaPlayer?.vlcVout?.areViewsAttached() }.getOrDefault(false)} positionMs=${runCatching { mediaPlayer?.time ?: 0L }.getOrDefault(0L)}"
+                    )
+                }
                 _currentState.value = PreviewState.ERROR
                 _currentError.value = "LibVLC playback error"
             }
             MediaPlayer.Event.Vout -> {
-                if (event.voutCount > 0) videoOutputReady = true
+                videoOutputReady = event.voutCount > 0
+                if (com.example.BuildConfig.DEBUG) {
+                    android.util.Log.d(
+                        "NativeVlcPreviewEngine",
+                        "VLC video-output count=${event.voutCount}; viewsAttached=${runCatching { mediaPlayer?.vlcVout?.areViewsAttached() }.getOrDefault(false)}"
+                    )
+                }
             }
         }
     }
@@ -166,6 +193,12 @@ class NativeVlcPreviewEngine(
                 }
                 _currentError.value = "LibVLC did not produce a video frame within 5 seconds"
                 _currentState.value = PreviewState.ERROR
+                if (com.example.BuildConfig.DEBUG) {
+                    android.util.Log.w(
+                        "NativeVlcPreviewEngine",
+                        "First-frame watchdog expired; voutReady=$videoOutputReady viewsAttached=${runCatching { mediaPlayer?.vlcVout?.areViewsAttached() }.getOrDefault(false)} positionMs=${runCatching { mediaPlayer?.time ?: 0L }.getOrDefault(0L)}"
+                    )
+                }
             }
             firstFrameWatchdogRunnable = null
         }
@@ -209,9 +242,22 @@ class NativeVlcPreviewEngine(
 
     private fun startPendingMediaIfOutputReady() {
         val player = mediaPlayer ?: return
-        if (!pendingMediaStart || !player.vlcVout.areViewsAttached()) return
+        if (!pendingMediaStart) return
+        val viewsAttached = runCatching { player.vlcVout.areViewsAttached() }.getOrDefault(false)
+        if (!viewsAttached) {
+            if (com.example.BuildConfig.DEBUG) {
+                android.util.Log.d("NativeVlcPreviewEngine", "Waiting to start media until LibVLC video views attach")
+            }
+            return
+        }
 
         pendingMediaStart = false
+        if (com.example.BuildConfig.DEBUG) {
+            android.util.Log.d(
+                "NativeVlcPreviewEngine",
+                "Starting LibVLC media with attached video views; pausedWarmup=$pauseAfterFirstFrame startMs=$initialPositionMs"
+            )
+        }
         if (pauseAfterFirstFrame) {
             // Decode one frame silently for a paused timeline preview.
             player.setVolume(0)
