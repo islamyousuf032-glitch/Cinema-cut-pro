@@ -9,7 +9,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ContentPaste
-import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.outlined.Place
 import androidx.compose.material3.*
@@ -372,7 +372,7 @@ private fun ColorGradeToolbar(
                 ) {
                     ColorGradeToolbarActions(
                         showNodes, showBefore, onToggleNodes, onShowPresets,
-                        onToggleBefore, onCopy, onPaste, onReset
+                        onToggleBefore, onCopy, onPaste, onReset, compact = true
                     )
                 }
             }
@@ -386,7 +386,7 @@ private fun ColorGradeToolbar(
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     ColorGradeToolbarActions(
                         showNodes, showBefore, onToggleNodes, onShowPresets,
-                        onToggleBefore, onCopy, onPaste, onReset
+                        onToggleBefore, onCopy, onPaste, onReset, compact = false
                     )
                 }
             }
@@ -418,41 +418,96 @@ private fun RowScope.ColorGradeToolbarActions(
     onToggleBefore: () -> Unit,
     onCopy: () -> Unit,
     onPaste: () -> Unit,
-    onReset: () -> Unit
+    onReset: () -> Unit,
+    compact: Boolean
 ) {
-    Button(
-        onClick = onToggleNodes,
-        colors = ButtonDefaults.buttonColors(
-            containerColor = if (showNodes) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant
-        ),
-        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-        shape = androidx.compose.foundation.shape.RoundedCornerShape(6.dp)
-    ) {
-        Text("Nodes", fontSize = 12.sp, color = if (showNodes) MaterialTheme.colorScheme.onPrimary else Color.LightGray)
-    }
-    Button(
-        onClick = onShowPresets,
-        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-        shape = androidx.compose.foundation.shape.RoundedCornerShape(6.dp)
-    ) {
-        Icon(imageVector = Icons.AutoMirrored.Filled.List, contentDescription = null, modifier = Modifier.size(16.dp))
-        Spacer(modifier = Modifier.width(4.dp))
-        Text("Presets", fontSize = 12.sp)
-    }
-    TextButton(
-        onClick = onToggleBefore,
-        shape = androidx.compose.foundation.shape.RoundedCornerShape(6.dp)
-    ) {
-        Text(if (showBefore) "Show After" else "Show Before", fontSize = 12.sp, maxLines = 1)
-    }
-    IconButton(onClick = onCopy, modifier = Modifier.size(32.dp)) {
-        Icon(Icons.Default.ContentCopy, contentDescription = "Copy grade")
-    }
-    IconButton(onClick = onPaste, modifier = Modifier.size(32.dp)) {
-        Icon(Icons.Default.ContentPaste, contentDescription = "Paste grade")
-    }
-    IconButton(onClick = onReset, modifier = Modifier.size(32.dp)) {
-        Icon(Icons.Default.Refresh, contentDescription = "Reset all adjustments", tint = MaterialTheme.colorScheme.error)
+    if (compact) {
+        var showMoreActions by remember { mutableStateOf(false) }
+
+        TextButton(
+            onClick = onToggleNodes,
+            modifier = Modifier.heightIn(min = 40.dp),
+            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
+            colors = ButtonDefaults.textButtonColors(
+                contentColor = if (showNodes) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        ) {
+            Text("Nodes", fontSize = 12.sp)
+        }
+        TextButton(
+            onClick = onShowPresets,
+            modifier = Modifier.heightIn(min = 40.dp),
+            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)
+        ) {
+            Text("Presets", fontSize = 12.sp)
+        }
+        TextButton(
+            onClick = onToggleBefore,
+            modifier = Modifier.heightIn(min = 40.dp),
+            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)
+        ) {
+            Text(if (showBefore) "Show After" else "Show Before", fontSize = 12.sp, maxLines = 1)
+        }
+        Box {
+            IconButton(onClick = { showMoreActions = true }) {
+                Icon(Icons.Default.MoreVert, contentDescription = "More color grading actions")
+            }
+            DropdownMenu(
+                expanded = showMoreActions,
+                onDismissRequest = { showMoreActions = false }
+            ) {
+                DropdownMenuItem(
+                    text = { Text("Copy grade") },
+                    leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
+                    onClick = { showMoreActions = false; onCopy() }
+                )
+                DropdownMenuItem(
+                    text = { Text("Paste grade") },
+                    leadingIcon = { Icon(Icons.Default.ContentPaste, contentDescription = null) },
+                    onClick = { showMoreActions = false; onPaste() }
+                )
+                DropdownMenuItem(
+                    text = { Text("Reset all adjustments") },
+                    leadingIcon = { Icon(Icons.Default.Refresh, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
+                    onClick = { showMoreActions = false; onReset() }
+                )
+            }
+        }
+    } else {
+        Button(
+            onClick = onToggleNodes,
+            colors = ButtonDefaults.buttonColors(
+                containerColor = if (showNodes) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant
+            ),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+            shape = androidx.compose.foundation.shape.RoundedCornerShape(6.dp)
+        ) {
+            Text("Nodes", fontSize = 12.sp, color = if (showNodes) MaterialTheme.colorScheme.onPrimary else Color.LightGray)
+        }
+        Button(
+            onClick = onShowPresets,
+            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+            shape = androidx.compose.foundation.shape.RoundedCornerShape(6.dp)
+        ) {
+            Icon(imageVector = Icons.AutoMirrored.Filled.List, contentDescription = null, modifier = Modifier.size(16.dp))
+            Spacer(modifier = Modifier.width(4.dp))
+            Text("Presets", fontSize = 12.sp)
+        }
+        TextButton(
+            onClick = onToggleBefore,
+            shape = androidx.compose.foundation.shape.RoundedCornerShape(6.dp)
+        ) {
+            Text(if (showBefore) "Show After" else "Show Before", fontSize = 12.sp, maxLines = 1)
+        }
+        IconButton(onClick = onCopy, modifier = Modifier.size(32.dp)) {
+            Icon(Icons.Default.ContentCopy, contentDescription = "Copy grade")
+        }
+        IconButton(onClick = onPaste, modifier = Modifier.size(32.dp)) {
+            Icon(Icons.Default.ContentPaste, contentDescription = "Paste grade")
+        }
+        IconButton(onClick = onReset, modifier = Modifier.size(32.dp)) {
+            Icon(Icons.Default.Refresh, contentDescription = "Reset all adjustments", tint = MaterialTheme.colorScheme.error)
+        }
     }
 }
