@@ -66,7 +66,12 @@ class Media3TranscoderBackend(private val context: Context) : TranscoderBackend 
         val editedMediaItem = EditedMediaItem.Builder(mediaItem)
             .setEffects(androidx.media3.transformer.Effects(emptyList(), scaleEffects))
             .build()
-        val composition = Composition.Builder(EditedMediaItemSequence.fromSingleItem(editedMediaItem))
+        val sequence = if (settings.audioMimeType == null) {
+            EditedMediaItemSequence.withVideoFrom(listOf(editedMediaItem))
+        } else {
+            EditedMediaItemSequence.withAudioAndVideoFrom(listOf(editedMediaItem))
+        }
+        val composition = Composition.Builder(sequence)
             .setHdrMode(
                 if (settings.shouldToneMapHdrToSdr) {
                     Composition.HDR_MODE_TONE_MAP_HDR_TO_SDR_USING_OPEN_GL
