@@ -61,6 +61,17 @@ data class PreviewPlaybackFailure(
     val category: PreviewPlaybackFailureCategory = PreviewPlaybackFailureCategory.PLAYBACK,
     val errorCodeName: String? = null
 ) {
+    /** Shader/frame-processor errors are not evidence that the selected media/proxy is invalid. */
+    val isVideoEffectFailure: Boolean
+        get() = listOfNotNull(causeType, causeMessage, message)
+            .any { detail ->
+                val normalized = detail.lowercase()
+                normalized.contains("videoframeprocessing") ||
+                    normalized.contains("shader") ||
+                    normalized.contains("gpu color grading") ||
+                    normalized.contains("frame processing")
+            }
+
     fun toUserMessage(): String {
         val sourceContext = buildList {
             mimeType?.takeIf(String::isNotBlank)?.let(::add)

@@ -41,6 +41,7 @@ fun VideoViewportSection(
         project.mediaAssets.firstOrNull { it.assetId == mediaId }
     } ?: currentAsset
     val activeSourceIsProxy by timelinePreviewController.activeSourceIsProxy.collectAsState()
+    val colorGradingPreviewActive by timelinePreviewController.colorGradingPreviewActiveFlow.collectAsState()
     val playerState by timelinePreviewController.previewEngine.currentState.collectAsState()
     val playerError by timelinePreviewController.previewEngine.currentError.collectAsState()
     val firstFrameRendered by timelinePreviewController.previewEngine.firstFrameRendered.collectAsState()
@@ -105,6 +106,8 @@ fun VideoViewportSection(
         playerError,
         engineType,
         activeSourceIsProxy,
+        colorGradingPreviewActive,
+        playbackFailure,
         previewSettings.autoFallbackOnFailure
     ) {
         val error = playerError
@@ -117,7 +120,10 @@ fun VideoViewportSection(
         if (handledPlaybackError == errorKey) return@LaunchedEffect
         handledPlaybackError = errorKey
 
-        val fellBackFromProxy = asset != null && activeSourceIsProxy &&
+        val failureIsFromVideoEffects = playbackFailure?.isVideoEffectFailure == true
+        val shouldRecordSourceFailure = !colorGradingPreviewActive && !failureIsFromVideoEffects
+        val fellBackFromProxy = shouldRecordSourceFailure &&
+            asset != null && activeSourceIsProxy &&
             timelinePreviewController.fallbackFromProxy(asset.assetId)
         if (fellBackFromProxy && asset != null) {
             timelineViewModel.markAssetProxyPlaybackFailed(asset.assetId)
@@ -129,7 +135,7 @@ fun VideoViewportSection(
             timelinePreviewController.setEngineType(com.example.timeline.engine.preview.PreviewEngineType.MEDIA3_FALLBACK)
             editorViewModel.updateSelectedEngine(com.example.timeline.engine.preview.PreviewEngineType.MEDIA3_FALLBACK)
             if (isPlaying) timelinePreviewController.play()
-        } else if (asset != null && !fellBackFromProxy) {
+        } else if (asset != null && !fellBackFromProxy && shouldRecordSourceFailure) {
             timelineViewModel.markAssetPlaybackFailed(asset.assetId)
         }
     }

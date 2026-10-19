@@ -110,6 +110,7 @@ fun ProfessionalColorGradingScreen(
     }
     val latestIsPlaying by rememberUpdatedState(isPlaying)
     DisposableEffect(previewController, engineToRestore, needsMedia3ForLiveGrade) {
+        previewController.setColorGradingPreviewActive(true)
         if (needsMedia3ForLiveGrade) {
             previewController.setEngineType(PreviewEngineType.MEDIA3_FALLBACK)
             if (latestIsPlaying) previewController.play()
@@ -123,6 +124,7 @@ fun ProfessionalColorGradingScreen(
                 previewController.setEngineType(engineToRestore)
                 if (latestIsPlaying) previewController.play()
             }
+            previewController.setColorGradingPreviewActive(false)
         }
     }
     LaunchedEffect(engineType) {

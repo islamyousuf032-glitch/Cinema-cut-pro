@@ -5,6 +5,38 @@ import org.junit.Test
 
 class PreviewPlaybackFailureTest {
     @Test
+    fun frameProcessorFailuresAreNotClassifiedAsInvalidMedia() {
+        val failure = PreviewPlaybackFailure(
+            engineType = PreviewEngineType.MEDIA3_FALLBACK,
+            uriScheme = "file",
+            uriAuthority = null,
+            mimeType = "video/mp4",
+            errorCode = 4003,
+            message = "Playback failed",
+            causeType = "VideoFrameProcessingException",
+            causeMessage = "Error adjusting video frame"
+        )
+
+        assertTrue(failure.isVideoEffectFailure)
+    }
+
+    @Test
+    fun decoderFailuresAreNotClassifiedAsVideoEffectFailures() {
+        val failure = PreviewPlaybackFailure(
+            engineType = PreviewEngineType.MEDIA3_FALLBACK,
+            uriScheme = "file",
+            uriAuthority = null,
+            mimeType = "video/mp4",
+            errorCode = 4003,
+            message = "Decoder failed",
+            causeType = "MediaCodecRenderer",
+            causeMessage = "No suitable decoder was found"
+        )
+
+        assertTrue(!failure.isVideoEffectFailure)
+    }
+
+    @Test
     fun userMessageIncludesMimeUriContextErrorCodeAndUnderlyingCause() {
         val failure = PreviewPlaybackFailure(
             engineType = PreviewEngineType.MEDIA3_FALLBACK,

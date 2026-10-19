@@ -67,6 +67,8 @@ class Media3FallbackPreviewEngine(context: Context) : PreviewEngine {
 
     private var currentUri: String? = null
     private var currentMimeType: String? = null
+    private var videoEffectsActive = false
+    private var effectFailureFallbackSource: String? = null
     private val released = AtomicBoolean(false)
 
     override var onTimeChanged: ((Long) -> Unit)? = null
@@ -108,6 +110,13 @@ class Media3FallbackPreviewEngine(context: Context) : PreviewEngine {
                 when (playbackState) {
                     Player.STATE_BUFFERING -> _currentState.value = PreviewState.LOADING
                     Player.STATE_READY -> {
+                        if (effectFailureFallbackSource == currentUri &&
+                            _currentPlaybackFailure.value?.isVideoEffectFailure == true
+                        ) {
+                            _currentPlaybackFailure.value = null
+                            _currentError.value = null
+                            _state.update { it.copy(error = null) }
+                        }
                         _currentState.value = if (exoPlayer.isPlaying) PreviewState.PLAYING else PreviewState.READY
                         if (pausedGradeRefreshPending && !exoPlayer.isPlaying) requestPausedGradeRefresh()
                     }
@@ -140,6 +149,7 @@ class Media3FallbackPreviewEngine(context: Context) : PreviewEngine {
 
             override fun onPlayerError(error: PlaybackException) {
                 val failure = toPlaybackFailure(error)
+                if (failure.isVideoEffectFailure && retryWithoutVideoEffects(failure)) return
                 _currentPlaybackFailure.value = failure
                 _currentError.value = failure.toUserMessage()
                 _state.update { it.copy(error = failure.toUserMessage(), isReady = false, isPlaying = false) }
@@ -196,24 +206,62 @@ class Media3FallbackPreviewEngine(context: Context) : PreviewEngine {
             }
         })
 
+        // Avoid routing every frame through a GPU effect graph when no grade is active. This is
+        // especially important for high-resolution/HDR sources; live effects are attached lazily.
+        exoPlayer.setVideoEffects(emptyList())
+    }
+
+    private fun updateVideoEffects(uriString: String, mimeType: String?, params: VideoAdjustmentParams?) {
+        val currentParams = params ?: VideoAdjustmentParams.default()
+        effectGraph.setParams(currentParams)
+        val shouldActivate = currentParams.hasActivePreviewEffect() && effectFailureFallbackSource != uriString
+        if (shouldActivate == videoEffectsActive) return
+
         try {
-            exoPlayer.setVideoEffects(effectGraph.getEffects())
-            if (com.example.BuildConfig.DEBUG) android.util.Log.d("PLAYER_MEDIA3", "Enabled shared GLSL color effect for preview")
-        } catch (e: Exception) {
+            exoPlayer.setVideoEffects(if (shouldActivate) effectGraph.getEffects() else emptyList())
+            videoEffectsActive = shouldActivate
+        } catch (error: Exception) {
+            effectFailureFallbackSource = uriString
+            videoEffectsActive = false
+            runCatching { exoPlayer.setVideoEffects(emptyList()) }
             val failure = PreviewPlaybackFailure(
                 engineType = engineType,
-                uriScheme = null,
-                uriAuthority = null,
-                mimeType = null,
+                uriScheme = runCatching { Uri.parse(uriString).scheme }.getOrNull(),
+                uriAuthority = runCatching { Uri.parse(uriString).authority }.getOrNull(),
+                mimeType = mimeType,
                 errorCode = null,
-                message = "GPU color grading could not initialize",
-                causeType = e.javaClass.simpleName,
-                causeMessage = e.message
+                message = "GPU color grading could not initialize; continuing without the effect",
+                causeType = error.javaClass.simpleName,
+                causeMessage = sanitizeSourceDetail(error.message, Uri.parse(uriString)),
+                category = PreviewPlaybackFailureCategory.PLAYBACK
             )
             _currentPlaybackFailure.value = failure
             _currentError.value = failure.toUserMessage()
-            _currentState.value = PreviewState.ERROR
-            if (com.example.BuildConfig.DEBUG) android.util.Log.e("Media3PreviewPlayer", "Failed to initialize the video effect graph", e)
+            _state.update { it.copy(error = failure.toUserMessage()) }
+        }
+    }
+
+    /** Retry an effect-pipeline playback error with the original decoded frames. */
+    private fun retryWithoutVideoEffects(failure: PreviewPlaybackFailure): Boolean {
+        val uriString = currentUri ?: return false
+        if (effectFailureFallbackSource == uriString) return false
+        effectFailureFallbackSource = uriString
+        return try {
+            exoPlayer.setVideoEffects(emptyList())
+            videoEffectsActive = false
+            _currentPlaybackFailure.value = failure
+            _currentError.value = failure.toUserMessage()
+            _state.update { it.copy(error = failure.toUserMessage(), isReady = false, isPlaying = false) }
+            _currentState.value = PreviewState.LOADING
+            stopTimeTracker()
+            exoPlayer.seekTo(exoPlayer.currentPosition.coerceAtLeast(0L))
+            exoPlayer.prepare()
+            true
+        } catch (error: Exception) {
+            if (com.example.BuildConfig.DEBUG) {
+                android.util.Log.w("Media3PreviewPlayer", "Could not retry without video effects", error)
+            }
+            false
         }
     }
 
@@ -239,6 +287,13 @@ class Media3FallbackPreviewEngine(context: Context) : PreviewEngine {
 
     private fun toPlaybackFailure(error: PlaybackException): PreviewPlaybackFailure {
         val sourceUri = currentUri?.let { runCatching { Uri.parse(it) }.getOrNull() }
+        val cause = generateSequence(error.cause) { it.cause }
+            .firstOrNull { nested ->
+                val type = nested.javaClass.simpleName.lowercase()
+                val message = nested.message.orEmpty().lowercase()
+                type.contains("videoframeprocessing") || type.contains("shader") ||
+                    message.contains("shader") || message.contains("frame processing")
+            } ?: error.cause
         val category = when (error.errorCode) {
             PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED,
             PlaybackException.ERROR_CODE_PARSING_MANIFEST_UNSUPPORTED,
@@ -266,8 +321,8 @@ class Media3FallbackPreviewEngine(context: Context) : PreviewEngine {
             mimeType = currentMimeType,
             errorCode = error.errorCode,
             message = sanitizeSourceDetail(error.message, sourceUri) ?: error.javaClass.simpleName,
-            causeType = error.cause?.javaClass?.simpleName,
-            causeMessage = sanitizeSourceDetail(error.cause?.message, sourceUri),
+            causeType = cause?.javaClass?.simpleName,
+            causeMessage = sanitizeSourceDetail(cause?.message, sourceUri),
             category = category,
             errorCodeName = error.errorCodeName
         )
@@ -351,14 +406,11 @@ class Media3FallbackPreviewEngine(context: Context) : PreviewEngine {
             android.util.Log.d("PLAYER_MEDIA3", "Loading ${normalizedMimeType ?: "unknown media"} at $safePositionMs ms; proxy=$useProxy")
         }
         
-        if (evaluatedParams != null) {
-            // The GlEffect reads this value on Media3's GL thread. The effect parameters are
-            // volatile so a paused frame refresh observes slider changes immediately.
-            effectGraph.setParams(evaluatedParams)
-        }
-        
+        if (currentUri != uriString) effectFailureFallbackSource = null
         val sameSource = currentUri == uriString && currentMimeType == normalizedMimeType
         if (sameSource && exoPlayer.playerError == null) {
+            // Keep the graph detached when no grade is active; attach it only when GPU work is needed.
+            updateVideoEffects(uriString, normalizedMimeType, evaluatedParams)
             val isPlaying = exoPlayer.isPlaying
             val positionDeltaMs = kotlin.math.abs(exoPlayer.currentPosition - safePositionMs)
             // Project/grade state can change many times per second while playing. Only seek for
@@ -392,6 +444,8 @@ class Media3FallbackPreviewEngine(context: Context) : PreviewEngine {
         _currentPlaybackFailure.value = null
         _firstFrameRendered.value = false
         _state.update { it.copy(error = null, usingProxy = useProxy, isReady = false) }
+        // The GlEffect reads these values on Media3's GL thread; non-default grades opt into it.
+        updateVideoEffects(uriString, normalizedMimeType, evaluatedParams)
 
         try {
             val mediaItemBuilder = MediaItem.Builder().setUri(Uri.parse(uriString))
@@ -428,6 +482,9 @@ class Media3FallbackPreviewEngine(context: Context) : PreviewEngine {
         cancelPausedGradeRefresh()
         currentUri = null
         currentMimeType = null
+        videoEffectsActive = false
+        effectFailureFallbackSource = null
+        runCatching { exoPlayer.setVideoEffects(emptyList()) }
         _currentError.value = null
         _currentPlaybackFailure.value = null
         _firstFrameRendered.value = false

@@ -32,7 +32,10 @@ class TimelinePreviewController(private val context: Context) {
     private var activeProject: TimelineProject? = null
     private var lastPlayheadFrame: Long = 0L
     @Volatile private var colorGradeBypassed: Boolean = false
+    @Volatile private var configuredPreferProxyPlayback: Boolean = true
     @Volatile private var preferProxyPlayback: Boolean = true
+    private val _colorGradingPreviewActive = MutableStateFlow(false)
+    val colorGradingPreviewActiveFlow: StateFlow<Boolean> = _colorGradingPreviewActive.asStateFlow()
 
     private fun evaluatedPreviewParams(project: TimelineProject, frame: Long): VideoAdjustmentParams =
         if (colorGradeBypassed) VideoAdjustmentParams.default()
@@ -49,8 +52,21 @@ class TimelinePreviewController(private val context: Context) {
 
     /** Selects the source for smooth (proxy-first) versus color-accurate (original-first) preview. */
     fun setPreferProxyPlayback(preferProxy: Boolean) {
-        if (preferProxyPlayback == preferProxy) return
-        preferProxyPlayback = preferProxy
+        configuredPreferProxyPlayback = preferProxy
+        applyPreviewSourcePreference()
+    }
+
+    /** Color grading always operates on the original, independent of the editor's preview preset. */
+    fun setColorGradingPreviewActive(active: Boolean) {
+        if (_colorGradingPreviewActive.value == active) return
+        _colorGradingPreviewActive.value = active
+        applyPreviewSourcePreference()
+    }
+
+    private fun applyPreviewSourcePreference() {
+        val effectivePreference = configuredPreferProxyPlayback && !_colorGradingPreviewActive.value
+        if (preferProxyPlayback == effectivePreference) return
+        preferProxyPlayback = effectivePreference
         activeProject?.let { project ->
             seekToTimelineFrame(project, lastPlayheadFrame, forceSeek = true)
         }
@@ -71,7 +87,7 @@ class TimelinePreviewController(private val context: Context) {
         if (asset.proxyStatus != com.example.timeline.media.ProxyStatus.READY || asset.proxyInfo == null) {
             proxyPlaybackFailedAssetIds.remove(asset.assetId)
         }
-        val forceOriginal = asset.assetId in proxyPlaybackFailedAssetIds
+        val forceOriginal = _colorGradingPreviewActive.value || asset.assetId in proxyPlaybackFailedAssetIds
         return PreviewSourceResolver.resolveSource(
             asset = asset,
             preferProxy = preferProxyPlayback,
