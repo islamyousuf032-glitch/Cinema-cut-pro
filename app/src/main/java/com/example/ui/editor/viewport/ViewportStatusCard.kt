@@ -31,6 +31,8 @@ fun ViewportStatusCard(
         if (currentAsset != null) {
             if (currentAsset.proxyStatus == ProxyStatus.GENERATING) {
                 Text("Proxy Generating...", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(2.dp), style = MaterialTheme.typography.bodySmall)
+            } else if (currentAsset.proxyStatus == ProxyStatus.READY) {
+                Text("Proxy Ready", color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(2.dp), style = MaterialTheme.typography.bodySmall)
             } else if (currentAsset.proxyStatus == ProxyStatus.REQUIRED) {
                 Text("Proxy Required", color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(2.dp), style = MaterialTheme.typography.bodySmall)
             } else if (currentAsset.proxyStatus == ProxyStatus.FAILED) {

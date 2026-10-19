@@ -37,6 +37,9 @@ fun VideoViewportSection(
     val previewSettings by editorViewModel.previewSettings.collectAsState()
     val currentClip by timelinePreviewController.activeClip.collectAsState()
     val currentAsset by timelinePreviewController.activeAsset.collectAsState()
+    val currentProjectAsset = currentClip?.mediaId?.let { mediaId ->
+        project.mediaAssets.firstOrNull { it.assetId == mediaId }
+    } ?: currentAsset
     val activeSourceIsProxy by timelinePreviewController.activeSourceIsProxy.collectAsState()
     val playerState by timelinePreviewController.previewEngine.currentState.collectAsState()
     val playerError by timelinePreviewController.previewEngine.currentError.collectAsState()
@@ -242,9 +245,10 @@ fun VideoViewportSection(
                 timecodeText = com.example.timeline.core.FrameTimecode.frameToTimecode(playheadFrame, settings.getFpsRational().toFloat().toInt()),
                 onSettingsClick = { showSettingsMenu = true }
             )
-            // ViewportStatusCard (appears only when there's an error)
+            // Resolve status from the current project snapshot by active clip id so the viewport
+            // and Project Media do not briefly report different proxy states after an update.
             ViewportStatusCard(
-                currentAsset = currentAsset,
+                currentAsset = currentProjectAsset,
                 playerError = playerError,
                 engineType = engineType,
                 isProxySource = activeSourceIsProxy,
@@ -294,7 +298,7 @@ fun VideoViewportSection(
         if (com.example.BuildConfig.DEBUG && previewSettings.showDebugOverlay) {
             val media3Metrics by media3MetricsFlow.collectAsState()
             DeveloperDebugPanel(
-                currentAsset = currentAsset,
+                currentAsset = currentProjectAsset,
                 playheadFrame = playheadFrame,
                 engineType = engineType.displayName,
                 isProxySource = activeSourceIsProxy,
