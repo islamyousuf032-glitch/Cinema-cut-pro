@@ -7,6 +7,7 @@ import android.os.Looper
 import androidx.media3.common.MediaItem
 import androidx.media3.transformer.Composition
 import androidx.media3.transformer.EditedMediaItem
+import androidx.media3.transformer.EditedMediaItemSequence
 import androidx.media3.transformer.ExportException
 import androidx.media3.transformer.ExportResult
 import androidx.media3.transformer.Transformer
@@ -38,7 +39,8 @@ class Media3TranscoderBackend(private val context: Context) : TranscoderBackend 
         trySend(TranscodeProgress.Setup)
         val outputFile = File(outputUri.path ?: error("Proxy output must be a file URI."))
         check(outputFile.parentFile?.isDirectory == true) { "Proxy output directory is unavailable." }
-        check(!outputFile.exists() || outputFile.delete()) { "Previous proxy output could not be replaced." }
+        val stagingFile = ProxyOutputFiles.stagingFileFor(outputFile)
+        check(!stagingFile.exists() || stagingFile.delete()) { "Previous proxy staging file could not be replaced." }
         val completedSuccessfully = AtomicBoolean(false)
         val isRunning = AtomicBoolean(true)
         var progressJob: Job? = null
@@ -64,20 +66,33 @@ class Media3TranscoderBackend(private val context: Context) : TranscoderBackend 
         val editedMediaItem = EditedMediaItem.Builder(mediaItem)
             .setEffects(androidx.media3.transformer.Effects(emptyList(), scaleEffects))
             .build()
+        val composition = Composition.Builder(EditedMediaItemSequence.fromSingleItem(editedMediaItem))
+            .setHdrMode(
+                if (settings.shouldToneMapHdrToSdr) {
+                    Composition.HDR_MODE_TONE_MAP_HDR_TO_SDR_USING_OPEN_GL
+                } else {
+                    Composition.HDR_MODE_KEEP_HDR
+                }
+            )
+            .build()
         
         val listener = object : Transformer.Listener {
             override fun onCompleted(composition: Composition, exportResult: ExportResult) {
-                if (!outputFile.isFile || outputFile.length() <= 0L) {
-                    val failure = IllegalStateException(
-                        "Media3 Transformer reported completion without a non-empty proxy file."
-                    )
+                try {
+                    if (!stagingFile.isFile || stagingFile.length() <= 0L) {
+                        error("Media3 Transformer reported completion without a non-empty proxy file.")
+                    }
+                    ProxyOutputFiles.publish(stagingFile, outputFile)
+                    if (!outputFile.isFile || outputFile.length() <= 0L) {
+                        error("The completed proxy could not be published to its destination.")
+                    }
+                    completedSuccessfully.set(true)
+                    trySend(TranscodeProgress.Completed)
+                    close()
+                } catch (failure: Exception) {
                     trySend(TranscodeProgress.Error(failure))
                     close(failure)
-                    return
                 }
-                completedSuccessfully.set(true)
-                trySend(TranscodeProgress.Completed)
-                close()
             }
 
             override fun onError(
@@ -97,7 +112,7 @@ class Media3TranscoderBackend(private val context: Context) : TranscoderBackend 
                 if (settings.audioMimeType != null) builder.setAudioMimeType(settings.audioMimeType)
                 builder.addListener(listener).build().also { builtTransformer ->
                     transformer = builtTransformer
-                    builtTransformer.start(editedMediaItem, outputFile.absolutePath)
+                    builtTransformer.start(composition, stagingFile.absolutePath)
                 }
             }
         } catch (error: Exception) {
@@ -106,7 +121,7 @@ class Media3TranscoderBackend(private val context: Context) : TranscoderBackend 
             withContext(NonCancellable + Dispatchers.Main.immediate) {
                 runCatching { failedTransformer?.cancel() }
             }
-            outputFile.delete()
+            stagingFile.delete()
             throw error
         }
 
@@ -134,7 +149,7 @@ class Media3TranscoderBackend(private val context: Context) : TranscoderBackend 
             if (!completedSuccessfully.get()) {
                 val cancelAndDelete = Runnable {
                     runCatching { active?.cancel() }
-                    outputFile.delete()
+                    stagingFile.delete()
                 }
                 if (Looper.myLooper() == Looper.getMainLooper()) cancelAndDelete.run()
                 else mainHandler.post(cancelAndDelete)

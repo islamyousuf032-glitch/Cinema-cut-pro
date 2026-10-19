@@ -48,13 +48,15 @@ class ProxyGenerationWorker(
         val sourceWidth = inputData.getInt(KEY_SOURCE_WIDTH, 1920)
         val sourceHeight = inputData.getInt(KEY_SOURCE_HEIGHT, 1080)
         val hasAudio = inputData.getBoolean(KEY_HAS_AUDIO, true)
+        val sourceIsHdr = inputData.getBoolean(KEY_SOURCE_HDR, false)
         
-        // Settings could be parsed from inputData
         val settings = ProxySettings(
             sourceWidth = sourceWidth,
             sourceHeight = sourceHeight,
             videoMimeType = "video/avc",
-            audioMimeType = if (hasAudio) androidx.media3.common.MimeTypes.AUDIO_AAC else null
+            audioMimeType = if (hasAudio) androidx.media3.common.MimeTypes.AUDIO_AAC else null,
+            sourceIsHdr = sourceIsHdr,
+            forceSdr = true
         )
         
         val backend = Media3TranscoderBackend(applicationContext)
@@ -123,6 +125,7 @@ class ProxyGenerationWorker(
         const val KEY_SOURCE_WIDTH = "source_width"
         const val KEY_SOURCE_HEIGHT = "source_height"
         const val KEY_HAS_AUDIO = "has_audio"
+        const val KEY_SOURCE_HDR = "source_hdr"
         const val KEY_PROGRESS = "progress"
         const val KEY_STATUS = "status"
         const val KEY_ERROR_MSG = "error_msg"

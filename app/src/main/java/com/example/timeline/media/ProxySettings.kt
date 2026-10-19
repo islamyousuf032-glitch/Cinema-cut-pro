@@ -7,5 +7,9 @@ data class ProxySettings(
     val audioBitrate: Int = 128_000,
     val videoMimeType: String = "video/avc", // H.264
     val audioMimeType: String? = null, // Don't force transcode
-    val forceSdr: Boolean = true // Convert HDR to SDR for proxy
-)
+    val sourceIsHdr: Boolean = false,
+    val forceSdr: Boolean = true // Convert detected HDR input to SDR for proxy
+) {
+    val shouldToneMapHdrToSdr: Boolean
+        get() = forceSdr && sourceIsHdr
+}

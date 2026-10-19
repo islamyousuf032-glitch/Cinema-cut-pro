@@ -24,6 +24,7 @@ class ImportWorkManager(private val context: Context) {
             .putInt(ProxyGenerationWorker.KEY_SOURCE_WIDTH, asset.metadata.width)
             .putInt(ProxyGenerationWorker.KEY_SOURCE_HEIGHT, asset.metadata.height)
             .putBoolean(ProxyGenerationWorker.KEY_HAS_AUDIO, asset.metadata.hasAudio)
+            .putBoolean(ProxyGenerationWorker.KEY_SOURCE_HDR, asset.metadata.videoStreams.any { it.isHdr })
             .build()
             
         val request = OneTimeWorkRequestBuilder<ProxyGenerationWorker>()
