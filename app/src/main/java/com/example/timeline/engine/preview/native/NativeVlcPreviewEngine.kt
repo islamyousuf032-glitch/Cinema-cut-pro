@@ -1,11 +1,16 @@
 package com.example.timeline.engine.preview.native
 
 import android.content.Context
+import android.content.res.Configuration
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.view.Surface
+import android.view.SurfaceView
+import android.view.TextureView
 import android.view.View
+import android.view.ViewGroup
+import android.view.ViewTreeObserver
 import com.example.model.adjustments.VideoAdjustmentParams
 import com.example.timeline.core.transform.TransformFitMode
 import com.example.timeline.engine.preview.PreviewEngine
@@ -52,6 +57,8 @@ class NativeVlcPreviewEngine(
     private var pendingMediaStart = false
     private var attachedLayout: org.videolan.libvlc.util.VLCVideoLayout? = null
     private var layoutAttachListener: View.OnAttachStateChangeListener? = null
+    private var layoutTreeObserver: ViewTreeObserver? = null
+    private var layoutGlobalLayoutListener: ViewTreeObserver.OnGlobalLayoutListener? = null
     private val mainHandler = Handler(Looper.getMainLooper())
     @Volatile private var loadGeneration = 0
     @Volatile private var pauseAfterFirstFrame = false
@@ -65,6 +72,77 @@ class NativeVlcPreviewEngine(
     private var firstFrameWatchdogRunnable: Runnable? = null
 
     override var onTimeChanged: ((Long) -> Unit)? = null
+
+    /**
+     * LibVLC's Android view helper can size a video surface using the host Activity's
+     * orientation. A landscape preview embedded in the portrait editor must instead use the
+     * actual Compose viewport bounds. Keep LibVLC's own fit policy, but normalize its output
+     * surface and intermediate frames to the embedded viewport when those orientations differ.
+     */
+    private fun normalizeEmbeddedVideoSurface(layout: org.videolan.libvlc.util.VLCVideoLayout) {
+        if (!layout.isAttachedToWindow || layout.width <= layout.height) return
+        if (layout.resources.configuration.orientation != Configuration.ORIENTATION_PORTRAIT) return
+
+        var changed = false
+        fun fill(view: View) {
+            val params = view.layoutParams ?: return
+            if (params.width == ViewGroup.LayoutParams.MATCH_PARENT &&
+                params.height == ViewGroup.LayoutParams.MATCH_PARENT
+            ) return
+            params.width = ViewGroup.LayoutParams.MATCH_PARENT
+            params.height = ViewGroup.LayoutParams.MATCH_PARENT
+            view.layoutParams = params
+            changed = true
+        }
+
+        fun visit(view: View) {
+            if (view is TextureView || view is SurfaceView) {
+                var ancestor = view.parent as? View
+                while (ancestor != null && ancestor !== layout) {
+                    fill(ancestor)
+                    ancestor = ancestor.parent as? View
+                }
+                fill(view)
+            }
+            if (view is ViewGroup) {
+                for (index in 0 until view.childCount) visit(view.getChildAt(index))
+            }
+        }
+
+        visit(layout)
+        if (changed) {
+            layout.invalidate()
+            if (com.example.BuildConfig.DEBUG) {
+                android.util.Log.d(
+                    "NativeVlcPreviewEngine",
+                    "Normalized LibVLC output to embedded landscape viewport ${layout.width}x${layout.height}"
+                )
+            }
+        }
+    }
+
+    private fun installEmbeddedSurfaceNormalizer(layout: org.videolan.libvlc.util.VLCVideoLayout) {
+        removeEmbeddedSurfaceNormalizer()
+        val observer = layout.viewTreeObserver
+        if (!observer.isAlive) return
+        val listener = ViewTreeObserver.OnGlobalLayoutListener {
+            normalizeEmbeddedVideoSurface(layout)
+        }
+        observer.addOnGlobalLayoutListener(listener)
+        layoutTreeObserver = observer
+        layoutGlobalLayoutListener = listener
+        layout.post { normalizeEmbeddedVideoSurface(layout) }
+    }
+
+    private fun removeEmbeddedSurfaceNormalizer() {
+        val observer = layoutTreeObserver
+        val listener = layoutGlobalLayoutListener
+        if (observer?.isAlive == true && listener != null) {
+            observer.removeOnGlobalLayoutListener(listener)
+        }
+        layoutTreeObserver = null
+        layoutGlobalLayoutListener = null
+    }
 
     init {
         try {
@@ -116,6 +194,7 @@ class NativeVlcPreviewEngine(
                     if (layout.isAttachedToWindow) {
                         layout.requestLayout()
                         layout.invalidate()
+                        normalizeEmbeddedVideoSurface(layout)
                     }
                 }
             }
@@ -321,6 +400,7 @@ class NativeVlcPreviewEngine(
                 // SurfaceView window that can be obscured by the transformed Compose canvas.
                 player.attachViews(layout, null, true, true)
             }
+            installEmbeddedSurfaceNormalizer(layout)
             applyVideoScale(force = true)
             if (com.example.BuildConfig.DEBUG) {
                 android.util.Log.d(
@@ -340,6 +420,7 @@ class NativeVlcPreviewEngine(
 
     private fun handleLayoutDetached(layout: org.videolan.libvlc.util.VLCVideoLayout) {
         if (attachedLayout !== layout) return
+        removeEmbeddedSurfaceNormalizer()
         val player = mediaPlayer ?: return
         val resumePlayback = !pauseAfterFirstFrame && (player.isPlaying || pendingMediaStart)
         if (player.isPlaying) player.pause()
