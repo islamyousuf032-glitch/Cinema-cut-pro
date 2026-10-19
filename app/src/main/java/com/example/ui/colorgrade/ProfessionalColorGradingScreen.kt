@@ -178,21 +178,6 @@ fun ProfessionalColorGradingScreen(
                 onReset = { colorViewModel.resetAllAdjustments() }
             )
 
-            if (needsMedia3ForLiveGrade) {
-                Surface(
-                    color = Color(0xFF202A35),
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
-                    shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp)
-                ) {
-                    Text(
-                        text = "Live GPU grade preview: ${engineType.displayName}. ${engineToRestore.displayName} playback resumes when you leave Color.",
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = Color.White
-                    )
-                }
-            }
-            
             ColorPageTabs(
                 selectedTab = selectedTab,
                 onTabSelected = { selectedTab = it },
