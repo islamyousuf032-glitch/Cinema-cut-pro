@@ -88,11 +88,13 @@ fun CleanVideoCanvas(
                     currentAsset.previewStatus == PreviewStatus.PROXY_REQUIRED ||
                     currentAsset.previewStatus == PreviewStatus.UNSUPPORTED ||
                     currentAsset.previewStatus == PreviewStatus.STILL_FRAME_ONLY
-                val needsStillFrame = (requiresProxy && currentAsset.proxyStatus != ProxyStatus.READY) ||
-                    currentAsset.previewStatus == PreviewStatus.DIRECT_FAILED_RUNTIME ||
-                    (!isReady && playerError != null)
+                val hasProxy = currentAsset.proxyStatus == ProxyStatus.READY && currentAsset.proxyPlaybackFailure.isNullOrBlank()
+                val needsStillFrame = !isReady && (
+                    (requiresProxy && !hasProxy) ||
+                        currentAsset.previewStatus == PreviewStatus.DIRECT_FAILED_RUNTIME ||
+                        playerError != null
+                    )
                 
-                val hasProxy = currentAsset.proxyStatus == ProxyStatus.READY
                 val isDirectFailed = currentAsset.previewStatus == PreviewStatus.DIRECT_FAILED_RUNTIME || (hasProxy && currentAsset.previewStatus == PreviewStatus.NOT_TESTED)
 
                 if (currentAsset.mediaAvailabilityStatus == MediaAvailabilityStatus.MISSING_NEEDS_RELINK || currentAsset.mediaErrorStatus != MediaErrorStatus.NONE) {

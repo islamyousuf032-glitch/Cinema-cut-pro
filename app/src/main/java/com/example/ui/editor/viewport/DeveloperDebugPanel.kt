@@ -72,6 +72,15 @@ fun DeveloperDebugPanel(
                     )
                 }
             }
+            currentAsset.proxyPlaybackFailure?.takeIf { it.isNotBlank() }?.let { message ->
+                Text(
+                    "Proxy playback warning: ${redactLocalPaths(message)}",
+                    color = Color.Yellow,
+                    fontSize = 10.sp,
+                    maxLines = 2,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                )
+            }
         }
         if (playbackErrorCode != null || playbackFailureCategory != null) {
             Text(

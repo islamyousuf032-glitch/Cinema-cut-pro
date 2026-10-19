@@ -198,6 +198,25 @@ fun MediaAssetItem(
                              )
                          }
                      }
+                } else if (asset.proxyStatus == ProxyStatus.READY && !asset.proxyPlaybackFailure.isNullOrBlank()) {
+                     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                         Text("Proxy playback failed", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall)
+                         Text(
+                             text = "Regenerate Proxy",
+                             style = MaterialTheme.typography.labelSmall,
+                             modifier = Modifier.clickable { onGenerateProxy() },
+                             color = MaterialTheme.colorScheme.primary
+                         )
+                         asset.proxyPlaybackFailure?.let { message ->
+                             Text(
+                                 text = message,
+                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                 style = MaterialTheme.typography.labelSmall,
+                                 maxLines = 2,
+                                 overflow = TextOverflow.Ellipsis
+                             )
+                         }
+                     }
                 } else if (asset.proxyStatus == ProxyStatus.READY) {
                      Text("Proxy Ready", color = Color.Green, style = MaterialTheme.typography.labelSmall)
                 } else if (asset.proxyStatus == ProxyStatus.REQUIRED ||
