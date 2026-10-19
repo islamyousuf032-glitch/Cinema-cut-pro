@@ -67,6 +67,14 @@ class Media3TranscoderBackend(private val context: Context) : TranscoderBackend 
         
         val listener = object : Transformer.Listener {
             override fun onCompleted(composition: Composition, exportResult: ExportResult) {
+                if (!outputFile.isFile || outputFile.length() <= 0L) {
+                    val failure = IllegalStateException(
+                        "Media3 Transformer reported completion without a non-empty proxy file."
+                    )
+                    trySend(TranscodeProgress.Error(failure))
+                    close(failure)
+                    return
+                }
                 completedSuccessfully.set(true)
                 trySend(TranscodeProgress.Completed)
                 close()
