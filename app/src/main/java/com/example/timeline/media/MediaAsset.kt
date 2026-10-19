@@ -33,6 +33,8 @@ data class MediaAsset(
     val mediaAvailabilityStatus: MediaAvailabilityStatus = MediaAvailabilityStatus.AVAILABLE_ORIGINAL_URI,
     val metadata: MediaMetadata,
     val proxyInfo: ProxyInfo? = null,
+    /** Playback failure for a generated proxy; independent from whether proxy generation succeeded. */
+    val proxyPlaybackFailure: String? = null,
     val optimizedMediaInfo: ProxyInfo? = null,
     val thumbnailUri: String? = null,
     val waveformUri: String? = null,

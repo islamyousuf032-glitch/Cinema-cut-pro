@@ -31,8 +31,23 @@ fun ViewportStatusCard(
         if (currentAsset != null) {
             if (currentAsset.proxyStatus == ProxyStatus.GENERATING) {
                 Text("Proxy Generating...", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(2.dp), style = MaterialTheme.typography.bodySmall)
-            } else if (currentAsset.proxyStatus == ProxyStatus.READY) {
+            } else if (currentAsset.proxyStatus == ProxyStatus.READY && currentAsset.proxyPlaybackFailure == null) {
                 Text("Proxy Ready", color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(2.dp), style = MaterialTheme.typography.bodySmall)
+            } else if (currentAsset.proxyStatus == ProxyStatus.READY && !currentAsset.proxyPlaybackFailure.isNullOrBlank()) {
+                Text(
+                    "Proxy generated, but playback failed; using original",
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(2.dp),
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Text(
+                    "Proxy details: ${redactProxyError(currentAsset.proxyPlaybackFailure)}",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 2.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
             } else if (currentAsset.proxyStatus == ProxyStatus.REQUIRED) {
                 Text("Proxy Required", color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(2.dp), style = MaterialTheme.typography.bodySmall)
             } else if (currentAsset.proxyStatus == ProxyStatus.FAILED) {
@@ -59,8 +74,9 @@ fun ViewportStatusCard(
                 }
             }
 
-            val hasProxy = currentAsset.proxyStatus == ProxyStatus.READY
+            val hasProxy = currentAsset.proxyStatus == ProxyStatus.READY && currentAsset.proxyPlaybackFailure.isNullOrBlank()
             val canRetryProxy = currentAsset.proxyStatus == ProxyStatus.FAILED ||
+                currentAsset.proxyPlaybackFailure != null ||
                 currentAsset.proxyStatus == ProxyStatus.REQUIRED ||
                 currentAsset.previewStatus == PreviewStatus.DIRECT_FAILED_RUNTIME ||
                 currentAsset.previewStatus == PreviewStatus.PROXY_REQUIRED
@@ -70,7 +86,13 @@ fun ViewportStatusCard(
                     modifier = Modifier.height(32.dp).padding(top = 2.dp),
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
                 ) {
-                    Text(if (currentAsset.proxyStatus == ProxyStatus.FAILED) "Retry Proxy" else "Generate Proxy")
+                    Text(
+                        if (currentAsset.proxyStatus == ProxyStatus.FAILED || currentAsset.proxyPlaybackFailure != null) {
+                            "Regenerate Proxy"
+                        } else {
+                            "Generate Proxy"
+                        }
+                    )
                 }
             }
             if (currentAsset.previewStatus == PreviewStatus.DIRECT_FAILED_RUNTIME && !hasProxy) {

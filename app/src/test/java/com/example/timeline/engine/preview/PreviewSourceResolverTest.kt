@@ -34,8 +34,24 @@ class PreviewSourceResolverTest {
 
         assertNotNull(source)
         assertEquals("file:///proxy/proxy.mp4", source?.uri)
-        assertEquals("video/avc", source?.mimeType)
+        assertEquals("video/mp4", source?.mimeType)
         assertTrue(source?.isProxy ?: false)
+    }
+
+    @Test
+    fun proxyPlaybackFailureKeepsGeneratedStatusButRoutesToOriginal() {
+        val source = PreviewSourceResolver.resolveSource(
+            asset(
+                localUri = "/data/user/0/example/files/source.mp4",
+                proxyReady = true
+            ).copy(proxyPlaybackFailure = "Proxy renderer failed"),
+            preferProxy = true
+        )
+
+        assertNotNull(source)
+        assertEquals("/data/user/0/example/files/source.mp4", source?.uri)
+        assertEquals("video/mp4", source?.mimeType)
+        assertFalse(source?.isProxy ?: true)
     }
 
     @Test

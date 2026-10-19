@@ -115,14 +115,16 @@ class TimelineViewModel(context: Context) : ViewModel() {
         updateState(stateNow.project.copy(mediaAssets = updatedAssets))
     }
 
-    /** Marks only a proxy that was actually selected by the preview engine as failed. */
+    /** Records a preview failure separately; it does not undo successful proxy generation. */
     fun markAssetProxyPlaybackFailed(assetId: String) {
         val stateNow = _uiState.value
         val updatedAssets = stateNow.project.mediaAssets.map { asset ->
-            if (asset.assetId == assetId && asset.proxyStatus == ProxyStatus.READY) {
+            if (asset.assetId == assetId &&
+                asset.proxyStatus == ProxyStatus.READY &&
+                asset.proxyPlaybackFailure == null
+            ) {
                 asset.copy(
-                    proxyStatus = ProxyStatus.FAILED,
-                    errorMessage = "Proxy playback failed; the original media will be tried."
+                    proxyPlaybackFailure = "Proxy playback failed; the original media will be tried."
                 )
             } else asset
         }
@@ -343,6 +345,16 @@ class TimelineViewModel(context: Context) : ViewModel() {
             workManager.getWorkInfoByIdFlow(workId).collect { workInfo ->
                 if (workInfo == null) return@collect
 
+                val isTerminal = workInfo.state == WorkInfo.State.SUCCEEDED ||
+                    workInfo.state == WorkInfo.State.FAILED ||
+                    workInfo.state == WorkInfo.State.CANCELLED
+                // A delayed observation from an older request must never overwrite the state of a
+                // newer retry for the same asset.
+                if (activeProxyJobs[asset.assetId] != workId) {
+                    if (isTerminal) kotlinx.coroutines.currentCoroutineContext().cancel()
+                    return@collect
+                }
+
                 val progress = workInfo.progress.getInt(ProxyGenerationWorker.KEY_PROGRESS, 0)
                 _proxyProgress.value = _proxyProgress.value.toMutableMap().apply {
                     this[asset.assetId] = progress.coerceIn(0, 100) / 100f
@@ -356,11 +368,13 @@ class TimelineViewModel(context: Context) : ViewModel() {
                             if (current.assetId != asset.assetId) current
                             else if (outputUri == null) current.copy(
                                 proxyStatus = ProxyStatus.FAILED,
+                                proxyPlaybackFailure = null,
                                 errorMessage = "Proxy worker completed without an output file."
                             ) else {
                                 val (proxyWidth, proxyHeight) = proxyDimensions(current.metadata.width, current.metadata.height)
                                 current.copy(
                                     proxyStatus = ProxyStatus.READY,
+                                    proxyPlaybackFailure = null,
                                     errorMessage = null,
                                     proxyInfo = ProxyInfo(
                                         uriString = outputUri,
@@ -369,7 +383,7 @@ class TimelineViewModel(context: Context) : ViewModel() {
                                         frameRate = current.metadata.estimatedFrameRate?.fpsAsFloat ?: 30f,
                                         isProxyGenerated = true,
                                         proxyFormat = "mp4",
-                                        proxyMimeType = "video/avc"
+                                        proxyMimeType = "video/mp4"
                                     )
                                 )
                             }
@@ -383,6 +397,7 @@ class TimelineViewModel(context: Context) : ViewModel() {
                         val updatedAssets = stateNow.project.mediaAssets.map { current ->
                             if (current.assetId == asset.assetId) current.copy(
                                 proxyStatus = ProxyStatus.FAILED,
+                                proxyPlaybackFailure = null,
                                 errorMessage = errorMsg
                             ) else current
                         }
@@ -393,6 +408,7 @@ class TimelineViewModel(context: Context) : ViewModel() {
                         val updatedAssets = stateNow.project.mediaAssets.map { current ->
                             if (current.assetId == asset.assetId) current.copy(
                                 proxyStatus = restoreStatus,
+                                proxyPlaybackFailure = asset.proxyPlaybackFailure,
                                 errorMessage = asset.errorMessage
                             ) else current
                         }
@@ -483,10 +499,15 @@ class TimelineViewModel(context: Context) : ViewModel() {
 
     fun generateProxy(assetId: String) {
         val asset = _uiState.value.project.mediaAssets.find { it.assetId == assetId } ?: return
-        if (asset.proxyStatus == ProxyStatus.READY || asset.proxyStatus == ProxyStatus.GENERATING) return
+        if (asset.proxyStatus == ProxyStatus.GENERATING ||
+            (asset.proxyStatus == ProxyStatus.READY && asset.proxyPlaybackFailure == null)
+        ) return
         val pFinal = _uiState.value.project.copy(
             mediaAssets = _uiState.value.project.mediaAssets.map {
-                if (it.assetId == assetId) it.copy(proxyStatus = ProxyStatus.GENERATING) else it
+                if (it.assetId == assetId) it.copy(
+                    proxyStatus = ProxyStatus.GENERATING,
+                    proxyPlaybackFailure = null
+                ) else it
             }
         )
         updateState(pFinal)

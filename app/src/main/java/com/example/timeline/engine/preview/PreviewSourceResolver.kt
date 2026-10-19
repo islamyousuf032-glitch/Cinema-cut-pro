@@ -11,7 +11,9 @@ object PreviewSourceResolver {
         preferProxy: Boolean,
         forceOriginal: Boolean = false
     ): Pair<String?, Boolean> {
-        val hasProxy = asset.proxyInfo != null && asset.proxyStatus == ProxyStatus.READY
+        val hasProxy = asset.proxyInfo != null &&
+            asset.proxyStatus == ProxyStatus.READY &&
+            asset.proxyPlaybackFailure.isNullOrBlank()
         val isDirectFailed = asset.previewStatus == PreviewStatus.DIRECT_FAILED_RUNTIME
         val useProxy = !forceOriginal && hasProxy && (preferProxy || isDirectFailed)
 
@@ -34,7 +36,17 @@ object PreviewSourceResolver {
         if (uri.isNullOrBlank()) return null
 
         val mimeType = if (useProxy) {
-            asset.proxyInfo?.proxyMimeType
+            val proxyInfo = asset.proxyInfo
+            val storedMimeType = proxyInfo?.proxyMimeType?.substringBefore(';')?.trim()
+            // Older project files stored the elementary-stream codec (video/avc) in this field.
+            // Media3 expects the container MIME for progressive MP4 sources.
+            if (proxyInfo?.proxyFormat?.equals("mp4", ignoreCase = true) == true ||
+                proxyInfo?.uriString?.substringBefore('?')?.endsWith(".mp4", ignoreCase = true) == true
+            ) {
+                "video/mp4"
+            } else {
+                storedMimeType
+            }
         } else {
             asset.mimeType
         }
