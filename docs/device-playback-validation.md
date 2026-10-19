@@ -32,3 +32,7 @@ adb logcat -b crash -d -v time
 ```
 
 Share the `FATAL EXCEPTION` or native signal section plus the debug-panel values. A short log excerpt is more useful than decoder initialization time alone.
+
+## APK delivery
+
+Every push to this branch builds and tests the debug APK and uploads a workflow artifact. To also publish a GitHub pre-release, the push commit subject must include `[publish-test-release]`; the APK is debug-signed for device testing, not Play Store distribution. The release includes a SHA-256 checksum.
