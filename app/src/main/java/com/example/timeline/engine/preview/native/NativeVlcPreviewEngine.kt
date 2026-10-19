@@ -7,6 +7,7 @@ import android.os.Looper
 import android.view.Surface
 import android.view.View
 import com.example.model.adjustments.VideoAdjustmentParams
+import com.example.timeline.core.transform.TransformFitMode
 import com.example.timeline.engine.preview.PreviewEngine
 import com.example.timeline.engine.preview.PreviewEngineType
 import com.example.timeline.engine.preview.PreviewEngineCapabilities
@@ -58,6 +59,8 @@ class NativeVlcPreviewEngine(
     @Volatile private var initialPositionMs = 0L
     @Volatile private var lastWarmupTimeMs: Long? = null
     @Volatile private var requestedVolumePercent: Int = 100
+    private var requestedFitMode: TransformFitMode = TransformFitMode.FIT
+    private var appliedVideoScale: MediaPlayer.ScaleType? = null
     private var pauseAfterFrameRunnable: Runnable? = null
     private var firstFrameWatchdogRunnable: Runnable? = null
 
@@ -84,6 +87,45 @@ class NativeVlcPreviewEngine(
         } catch (e: Exception) {
             _currentState.value = PreviewState.ERROR
             _currentError.value = "Failed to initialize LibVLC: ${e.message}"
+        }
+    }
+
+    /** Applies the same viewport fit policy used by Media3's PlayerView. */
+    fun setFitMode(fitMode: TransformFitMode) {
+        if (requestedFitMode == fitMode && appliedVideoScale != null) return
+        requestedFitMode = fitMode
+        applyVideoScale(force = true)
+    }
+
+    private fun applyVideoScale(force: Boolean = false) {
+        val player = mediaPlayer ?: return
+        val scaleType = when (requestedFitMode) {
+            TransformFitMode.FIT -> MediaPlayer.ScaleType.SURFACE_BEST_FIT
+            TransformFitMode.FILL, TransformFitMode.STRETCH -> MediaPlayer.ScaleType.SURFACE_FILL
+            TransformFitMode.ORIGINAL_SIZE -> MediaPlayer.ScaleType.SURFACE_ORIGINAL
+        }
+        if (!force && appliedVideoScale == scaleType) return
+
+        runCatching {
+            player.videoScale = scaleType
+            appliedVideoScale = scaleType
+            attachedLayout?.let { layout ->
+                layout.requestLayout()
+                layout.invalidate()
+                layout.post {
+                    if (layout.isAttachedToWindow) {
+                        layout.requestLayout()
+                        layout.invalidate()
+                    }
+                }
+            }
+            if (com.example.BuildConfig.DEBUG) {
+                android.util.Log.d("NativeVlcPreviewEngine", "Applied LibVLC viewport scale=$scaleType")
+            }
+        }.onFailure { error ->
+            if (com.example.BuildConfig.DEBUG) {
+                android.util.Log.w("NativeVlcPreviewEngine", "Could not apply LibVLC viewport scale=$scaleType", error)
+            }
         }
     }
 
@@ -146,6 +188,7 @@ class NativeVlcPreviewEngine(
             }
             MediaPlayer.Event.Vout -> {
                 videoOutputReady = event.voutCount > 0
+                if (videoOutputReady) applyVideoScale(force = true)
                 if (com.example.BuildConfig.DEBUG) {
                     android.util.Log.d(
                         "NativeVlcPreviewEngine",
@@ -278,6 +321,7 @@ class NativeVlcPreviewEngine(
                 // SurfaceView window that can be obscured by the transformed Compose canvas.
                 player.attachViews(layout, null, true, true)
             }
+            applyVideoScale(force = true)
             if (com.example.BuildConfig.DEBUG) {
                 android.util.Log.d(
                     "NativeVlcPreviewEngine",
@@ -372,6 +416,7 @@ class NativeVlcPreviewEngine(
             }
             player.media = media
             media.release()
+            applyVideoScale(force = true)
             pendingMediaStart = true
             if (pauseAfterFirstFrame) {
                 // The silent first-frame warm-up starts only after VLC has a real video output.

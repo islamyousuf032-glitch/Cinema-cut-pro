@@ -113,7 +113,10 @@ fun PlayerViewContainer(
                 is com.example.timeline.engine.preview.native.NativeVlcPreviewEngine -> {
                     AndroidView(
                         factory = { ctx -> org.videolan.libvlc.util.VLCVideoLayout(ctx) },
-                        update = { view -> previewEngine.attachToVideoLayout(view) },
+                        update = { view ->
+                            previewEngine.attachToVideoLayout(view)
+                            previewEngine.setFitMode(evaluatedTransform.fitMode)
+                        },
                         onRelease = { view ->
                             previewEngine.detachFromVideoLayout(view)
                         },
