@@ -227,7 +227,13 @@ class TimelineViewModel(context: Context) : ViewModel() {
                         val p2 = currentProject.copy(mediaAssets = currentProject.mediaAssets + initialAsset)
                         updateState(p2, markDirty = false)
                         
-                        val localPath = copyMediaToLocalStore(uri, initialAsset.assetId, initialAsset.displayName, projectId)
+                        val localPath = copyMediaToLocalStore(
+                            uri,
+                            initialAsset.assetId,
+                            initialAsset.displayName,
+                            projectId,
+                            initialAsset.metadata.originalFilename
+                        )
                         
                         initialAsset = initialAsset.copy(
                             localOriginalUriString = localPath,
@@ -262,27 +268,48 @@ class TimelineViewModel(context: Context) : ViewModel() {
         }
     }
     
-    private suspend fun copyMediaToLocalStore(uri: Uri, assetId: String, displayName: String, projectId: String): String? {
+    private suspend fun copyMediaToLocalStore(
+        uri: Uri,
+        assetId: String,
+        displayName: String,
+        projectId: String,
+        sourceFileName: String? = null
+    ): String? {
         return kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            var outputFile: File? = null
             try {
                 val mediaDir = File(contextRef.filesDir, "timeline_projects/$projectId/media/originals")
-                if (!mediaDir.exists()) {
-                    mediaDir.mkdirs()
-                }
-                
-                val ext = android.webkit.MimeTypeMap.getSingleton().getExtensionFromMimeType(contextRef.contentResolver.getType(uri)) ?: "mp4"
+                if (!mediaDir.exists() && !mediaDir.mkdirs()) return@withContext null
+
+                val mimeType = contextRef.contentResolver.getType(uri)
+                val extension = android.webkit.MimeTypeMap.getSingleton()
+                    .getExtensionFromMimeType(mimeType)
+                    ?.lowercase()
+                    ?.takeIf { it.matches(Regex("[a-z0-9]{1,10}")) }
+                    ?: (sourceFileName ?: displayName).substringAfterLast('.', "")
+                        .lowercase()
+                        .takeIf { it.matches(Regex("[a-z0-9]{1,10}")) }
+                    ?: "bin"
                 val safeName = displayName.replace(Regex("[^a-zA-Z0-9.-]"), "_")
-                val outputFile = File(mediaDir, "${assetId}_${safeName}")
-                
-                if (!outputFile.exists()) {
-                    contextRef.contentResolver.openInputStream(uri)?.use { input ->
-                        outputFile.outputStream().use { output ->
-                            input.copyTo(output)
-                        }
+                val targetFile = File(mediaDir, "${assetId}_${safeName}.$extension")
+                outputFile = targetFile
+
+                if (!targetFile.isFile || targetFile.length() <= 0L) {
+                    targetFile.delete()
+                    val input = contextRef.contentResolver.openInputStream(uri)
+                        ?: return@withContext null
+                    input.use { source ->
+                        targetFile.outputStream().use { destination -> source.copyTo(destination) }
                     }
                 }
-                "file://${outputFile.absolutePath}"
+
+                if (!targetFile.isFile || targetFile.length() <= 0L) {
+                    targetFile.delete()
+                    return@withContext null
+                }
+                "file://${targetFile.absolutePath}"
             } catch (e: Exception) {
+                outputFile?.delete()
                 if (com.example.BuildConfig.DEBUG) e.printStackTrace()
                 null
             }
@@ -628,7 +655,13 @@ class TimelineViewModel(context: Context) : ViewModel() {
         val asset = state.project.mediaAssets.find { it.assetId == assetId } ?: return
         
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-            val copied = copyMediaToLocalStore(uri, assetId, asset.displayName, state.project.id)
+            val copied = copyMediaToLocalStore(
+                uri,
+                assetId,
+                asset.displayName,
+                state.project.id,
+                asset.metadata.originalFilename
+            )
             if (copied != null) {
                 val updatedAsset = asset.copy(
                     localOriginalUriString = copied,

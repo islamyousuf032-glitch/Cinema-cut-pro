@@ -9,6 +9,11 @@ data class MediaStatusResult(
 class MediaImportDecisionEngine {
     fun decideImportStatus(result: MediaAnalysisResult): MediaStatusResult {
         val mimeType = result.defaultMimeType
+        val codecIdentifiers = result.videoStreams
+            .flatMap { listOf(it.codecName, it.codecMime) }
+            .joinToString(" ")
+            .lowercase()
+        val formatIdentifiers = "$mimeType $codecIdentifiers".lowercase()
         var directPlaybackSupport = false
         var proxyRecommendation = false
         var transcodeRecommendation = false
@@ -32,11 +37,11 @@ class MediaImportDecisionEngine {
             )
         }
 
-        if (mimeType.contains("raw") || mimeType.contains("braw") || mimeType.contains("r3d") || mimeType.contains("arriraw")) {
+        if (formatIdentifiers.contains("raw") || formatIdentifiers.contains("braw") || formatIdentifiers.contains("r3d") || formatIdentifiers.contains("arriraw")) {
             previewStatus = PreviewStatus.UNSUPPORTED
             proxyStatus = ProxyStatus.REQUIRED
             userMessage = "A manufacturer plugin is required to decode this RAW format."
-        } else if (mimeType.contains("prores") || mimeType.contains("dnxhr") || mimeType.contains("mxf")) {
+        } else if (formatIdentifiers.contains("prores") || formatIdentifiers.contains("dnxhr") || formatIdentifiers.contains("mxf")) {
             transcodeRecommendation = true
             previewStatus = PreviewStatus.UNSUPPORTED
             proxyStatus = ProxyStatus.REQUIRED
@@ -55,7 +60,7 @@ class MediaImportDecisionEngine {
                 warnings.add("No compatible decoder was detected for $mimeType")
             } else {
                 directPlaybackSupport = true
-                val isHevc = mimeType.contains("hevc") || mimeType.contains("h265")
+                val isHevc = formatIdentifiers.contains("hevc") || formatIdentifiers.contains("h265")
                 val isHighWorkload = isHighDecodeWorkload(result)
                 val isHdr = result.videoStreams.any { it.isHdr }
                 val noConfirmedHardwareDecoder = !hardwareDecoderAvailable

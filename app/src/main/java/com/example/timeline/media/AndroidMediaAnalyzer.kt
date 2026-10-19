@@ -98,7 +98,8 @@ class AndroidMediaAnalyzer(
                             decoderSupportUnknown = decoderSupport.unknown
                         )
                     )
-                    defaultMimeType = trackMime
+                    // Keep the container MIME reported by the document provider. `trackMime`
+                    // describes a codec (for example video/hevc), not the media container.
                 } else if (trackMime.startsWith("audio/")) {
                     audioStreams.add(
                         AudioStreamInfo(
@@ -111,9 +112,7 @@ class AndroidMediaAnalyzer(
                             hardwareDecodeSupported = true
                         )
                     )
-                    if (defaultMimeType == "application/octet-stream" || defaultMimeType.startsWith("audio/")) {
-                        defaultMimeType = trackMime
-                    }
+                    // Do not replace the container MIME with an audio codec MIME here.
                 } else if (trackMime.startsWith("image/")) {
                     width = format.getIntegerSafely(MediaFormat.KEY_WIDTH, width)
                     height = format.getIntegerSafely(MediaFormat.KEY_HEIGHT, height)

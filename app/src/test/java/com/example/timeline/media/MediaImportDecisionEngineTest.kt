@@ -80,6 +80,24 @@ class MediaImportDecisionEngineTest {
         assertEquals(ProxyStatus.RECOMMENDED, result.proxyStatus)
     }
 
+    @Test
+    fun hdrHevcProxyRecommendationUsesCodecMimeNotContainerMime() {
+        val mp4 = analysis(width = 1920, height = 1080, frameRate = 30f, hardware = true)
+        val hevcHdrStream = mp4.videoStreams.single().copy(
+            codecName = "hevc",
+            codecMime = "video/hevc",
+            isHdr = true
+        )
+
+        val result = decisionEngine.decideImportStatus(
+            mp4.copy(defaultMimeType = "video/mp4", videoStreams = listOf(hevcHdrStream))
+        )
+
+        assertTrue(result.report.proxyRecommendation)
+        assertEquals(ProxyStatus.RECOMMENDED, result.proxyStatus)
+        assertEquals("video/mp4", result.report.detectedFormat)
+    }
+
     private fun analysis(
         width: Int,
         height: Int,
