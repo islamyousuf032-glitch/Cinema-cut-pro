@@ -5,6 +5,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.timeline.media.MediaAsset
 import com.example.timeline.media.MediaAvailabilityStatus
@@ -34,6 +35,16 @@ fun ViewportStatusCard(
                 Text("Proxy Required", color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(2.dp), style = MaterialTheme.typography.bodySmall)
             } else if (currentAsset.proxyStatus == ProxyStatus.FAILED) {
                 Text("Proxy Failed", color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(2.dp), style = MaterialTheme.typography.bodySmall)
+                currentAsset.errorMessage?.takeIf { it.isNotBlank() }?.let { message ->
+                    Text(
+                        "Proxy details: ${redactProxyError(message)}",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 2.dp),
+                        style = MaterialTheme.typography.labelSmall,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
             }
 
             if (currentAsset.mediaErrorStatus != MediaErrorStatus.NONE) {
@@ -86,4 +97,11 @@ fun ViewportStatusCard(
             }
         }
     }
+}
+
+private fun redactProxyError(message: String): String {
+    return message
+        .replace(Regex("""(?i)(?:file|content)://[^\s]+"""), "[media URI]")
+        .replace(Regex("""/(?:data|storage|sdcard)/[^\s,;)]*""", RegexOption.IGNORE_CASE), "[media path]")
+        .take(240)
 }

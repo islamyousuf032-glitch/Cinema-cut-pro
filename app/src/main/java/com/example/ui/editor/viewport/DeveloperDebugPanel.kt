@@ -19,6 +19,10 @@ fun DeveloperDebugPanel(
     currentAsset: MediaAsset?,
     playheadFrame: Long,
     engineType: String,
+    isProxySource: Boolean = false,
+    playerError: String? = null,
+    playbackErrorCode: String? = null,
+    playbackFailureCategory: String? = null,
     media3Metrics: com.example.timeline.engine.preview.PreviewPlaybackMetrics? = null,
     modifier: Modifier = Modifier
 ) {
@@ -50,9 +54,42 @@ fun DeveloperDebugPanel(
             )
         }
         if (currentAsset != null) {
-            Text("URL: ${currentAsset.localOriginalUriString ?: currentAsset.originalUriString}", color = Color.White, fontSize = 10.sp)
+            val sourceMime = if (isProxySource) currentAsset.proxyInfo?.proxyMimeType else currentAsset.mimeType
+            Text(
+                "Source: ${if (isProxySource) "PROXY" else "ORIGINAL"} | Proxy status: ${currentAsset.proxyStatus}",
+                color = Color.White,
+                fontSize = 10.sp
+            )
+            Text("Source MIME: ${sourceMime ?: currentAsset.mimeType}", color = Color.White, fontSize = 10.sp)
+            if (currentAsset.proxyStatus == com.example.timeline.media.ProxyStatus.FAILED) {
+                currentAsset.errorMessage?.takeIf { it.isNotBlank() }?.let { message ->
+                    Text(
+                        "Proxy error: ${redactLocalPaths(message)}",
+                        color = Color.Yellow,
+                        fontSize = 10.sp,
+                        maxLines = 2,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                    )
+                }
+            }
         }
-        
+        if (playbackErrorCode != null || playbackFailureCategory != null) {
+            Text(
+                "Playback failure: ${playbackFailureCategory ?: "unknown"} / ${playbackErrorCode ?: "unknown code"}",
+                color = Color.Yellow,
+                fontSize = 10.sp
+            )
+        }
+        playerError?.takeIf { it.isNotBlank() }?.let { message ->
+            Text(
+                "Last error: ${redactLocalPaths(message)}",
+                color = Color.Red,
+                fontSize = 10.sp,
+                maxLines = 3,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+            )
+        }
+
         val stats = FrameTimeProfiler.stats.collectAsState().value
         Text("FPS: ${"%.1f".format(stats.uiFps)}", color = Color.White, fontSize = 10.sp)
         Text("Frame Time: ${"%.1f".format(stats.frameTimeMs)}ms (avg) / Memory: ${"%.1f".format(stats.memoryUsageMb)}MB", color = Color.White, fontSize = 10.sp)
@@ -60,4 +97,11 @@ fun DeveloperDebugPanel(
         val nativeTime = com.example.timeline.engine.native.NativeTimelineMetrics.lastLayoutTimeMs.collectAsState().value
         Text("Native Layout: ${nativeTime}ms (Available: ${com.example.timeline.engine.native.NativeTimelineCore.isAvailable()})", color = Color.White, fontSize = 10.sp)
     }
+}
+
+private fun redactLocalPaths(message: String): String {
+    return message
+        .replace(Regex("""(?i)(?:file|content)://[^\s]+"""), "[media URI]")
+        .replace(Regex("""/(?:data|storage|sdcard)/[^\s,;)]*""", RegexOption.IGNORE_CASE), "[media path]")
+        .take(240)
 }

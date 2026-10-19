@@ -4,12 +4,37 @@ import android.content.Context
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import androidx.work.Data
+import androidx.media3.transformer.ExportException
 import kotlinx.coroutines.CancellationException
 
 class ProxyGenerationWorker(
     appContext: Context,
     workerParams: WorkerParameters
 ) : CoroutineWorker(appContext, workerParams) {
+
+    private fun describeFailure(error: Throwable): String {
+        val causes = generateSequence(error) { it.cause }.toList()
+        val exportError = causes.filterIsInstance<ExportException>().firstOrNull()
+        val reason = error.message?.takeIf { it.isNotBlank() }
+            ?: causes.lastOrNull()?.message?.takeIf { it.isNotBlank() }
+            ?: error.javaClass.simpleName
+        val details = buildString {
+            append("Proxy generation failed")
+            exportError?.let { append(" — ${it.errorCodeName} (${it.errorCode})") }
+            append(": ")
+            append(reason)
+            val rootCause = causes.lastOrNull()
+            val rootMessage = rootCause?.message?.takeIf { it.isNotBlank() }
+            if (rootCause != null && rootCause !== error && rootMessage != null && rootMessage != reason) {
+                append(" — caused by ${rootCause.javaClass.simpleName}: ")
+                append(rootMessage)
+            }
+        }
+        return details
+            .replace(Regex("""(?i)(?:file|content)://[^\s]+"""), "[media URI]")
+            .replace(Regex("""/(?:data|storage|sdcard)/[^\s,;)]*""", RegexOption.IGNORE_CASE), "[media path]")
+            .take(700)
+    }
 
     override suspend fun doWork(): Result {
         fun invalidInput(message: String) = Result.failure(
@@ -63,7 +88,7 @@ class ProxyGenerationWorker(
                     }
                     is TranscodeProgress.Error -> {
                         success = false
-                        failureMessage = progress.exception.message ?: "Media3 Transformer could not create the proxy."
+                        failureMessage = describeFailure(progress.exception)
                         setProgress(Data.Builder().putString(KEY_ERROR_MSG, failureMessage).build())
                     }
                 }
@@ -74,7 +99,7 @@ class ProxyGenerationWorker(
         } catch (e: Exception) {
             backend.cancel()
             return Result.failure(
-                Data.Builder().putString(KEY_ERROR_MSG, "Proxy generation failed: ${e.message ?: e.javaClass.simpleName}").build()
+                Data.Builder().putString(KEY_ERROR_MSG, describeFailure(e)).build()
             )
         }
 

@@ -41,6 +41,11 @@ fun VideoViewportSection(
     val playerState by timelinePreviewController.previewEngine.currentState.collectAsState()
     val playerError by timelinePreviewController.previewEngine.currentError.collectAsState()
     val firstFrameRendered by timelinePreviewController.previewEngine.firstFrameRendered.collectAsState()
+    val playbackFailureFlow = remember(engineType, timelinePreviewController) {
+        timelinePreviewController.previewEngine.currentPlaybackFailure
+            ?: kotlinx.coroutines.flow.MutableStateFlow<com.example.timeline.engine.preview.PreviewPlaybackFailure?>(null)
+    }
+    val playbackFailure by playbackFailureFlow.collectAsState()
     val media3MetricsFlow = remember(engineType, timelinePreviewController) {
         (timelinePreviewController.previewEngine as? com.example.timeline.engine.preview.Media3FallbackPreviewEngine)
             ?.playbackMetrics
@@ -292,6 +297,10 @@ fun VideoViewportSection(
                 currentAsset = currentAsset,
                 playheadFrame = playheadFrame,
                 engineType = engineType.displayName,
+                isProxySource = activeSourceIsProxy,
+                playerError = playerError,
+                playbackErrorCode = playbackFailure?.errorCodeName ?: playbackFailure?.errorCode?.toString(),
+                playbackFailureCategory = playbackFailure?.category?.name,
                 media3Metrics = media3Metrics.takeIf {
                     engineType == com.example.timeline.engine.preview.PreviewEngineType.MEDIA3_FALLBACK
                 }
