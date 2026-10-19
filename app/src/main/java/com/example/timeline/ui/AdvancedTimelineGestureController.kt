@@ -14,7 +14,7 @@ object AdvancedTimelineGestureController {
         trackHeight: Float = 80f,
         trackPadding: Float = 12f
     ): TimelineClip? {
-        if (NativeAdvancedTimelineCore.isAvailable()) {
+        val nativeHitResult = if (NativeAdvancedTimelineCore.isAvailable()) {
             val clips = mutableListOf<Float>()
             var currentIdx = 0
             project.tracks.forEachIndexed { trackIndex, track ->
@@ -26,31 +26,30 @@ object AdvancedTimelineGestureController {
                     currentIdx++
                 }
             }
-            
-            val hitResult = NativeAdvancedTimelineCore.nativeHitTestClip(x, y, clips.toFloatArray())
-            if (hitResult.isNotEmpty() && hitResult[0] > 0.5f) {
-                val hitIdx = hitResult[1].toInt()
+            NativeAdvancedTimelineCore.hitTestClipOrNull(x, y, clips.toFloatArray())
+        } else null
+
+        if (nativeHitResult != null && nativeHitResult.size >= 2) {
+            if (nativeHitResult[0] > 0.5f) {
+                val hitIdx = nativeHitResult[1].toInt()
                 var idx = 0
                 project.tracks.forEach { track ->
                     track.clips.forEach { clip ->
-                        if (idx == hitIdx) {
-                            return clip
-                        }
+                        if (idx == hitIdx) return clip
                         idx++
                     }
                 }
             }
-        } else {
-            project.tracks.forEachIndexed { trackIndex, track ->
-                val top = trackIndex * (trackHeight + trackPadding)
-                val bottom = top + trackHeight
-                track.clips.forEach { clip ->
-                    val left = NativeAdvancedTimelineCore.frameToX(clip.timelineStart, pixelsPerFrame)
-                    val right = NativeAdvancedTimelineCore.frameToX(clip.timelineEnd, pixelsPerFrame)
-                    if (x in left..right && y in top..bottom) {
-                        return clip
-                    }
-                }
+            return null
+        }
+
+        project.tracks.forEachIndexed { trackIndex, track ->
+            val top = trackIndex * (trackHeight + trackPadding)
+            val bottom = top + trackHeight
+            track.clips.forEach { clip ->
+                val left = NativeAdvancedTimelineCore.frameToX(clip.timelineStart, pixelsPerFrame)
+                val right = NativeAdvancedTimelineCore.frameToX(clip.timelineEnd, pixelsPerFrame)
+                if (x in left..right && y in top..bottom) return clip
             }
         }
         return null
@@ -99,10 +98,11 @@ object AdvancedTimelineGestureController {
         pixelsPerFrame: Float,
         excludeClipId: String? = null
     ): Long {
-        if (!NativeAdvancedTimelineCore.isAvailable()) {
+        fun kotlinFallback(): Long {
             val fps = Math.round(project.settings.getFpsRational().toFloat()).coerceAtLeast(1)
             return SnapController().snapFrame(inputFrame, project, playheadFrame, pixelsPerFrame, excludeClipId, fps)
         }
+        if (!NativeAdvancedTimelineCore.isAvailable()) return kotlinFallback()
         
         val snapTargets = mutableListOf<Long>()
         snapTargets.add(0L)
@@ -134,10 +134,10 @@ object AdvancedTimelineGestureController {
         }
 
         
-        return NativeAdvancedTimelineCore.nativeSnapFrame(
+        return NativeAdvancedTimelineCore.snapFrameOrNull(
             inputFrame,
             snapTargets.toLongArray(),
             thresholdFrames
-        )
+        ) ?: kotlinFallback()
     }
 }

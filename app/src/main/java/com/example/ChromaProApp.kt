@@ -40,7 +40,8 @@ import kotlinx.coroutines.flow.sample
 )
 @Composable
 fun ChromaProApp(viewModel: MainViewModel = viewModel()) {
-    val context = androidx.compose.ui.platform.LocalContext.current.applicationContext
+    val activityContext = androidx.compose.ui.platform.LocalContext.current
+    val context = activityContext.applicationContext
     val timelineViewModel: com.example.timeline.ui.TimelineViewModel = viewModel(
         factory = object : androidx.lifecycle.ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
@@ -115,6 +116,16 @@ fun ChromaProApp(viewModel: MainViewModel = viewModel()) {
 
     var showScopes by remember { mutableStateOf(false) }
     var showAdvancedTimeline by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
+    DisposableEffect(showAdvancedTimeline, activityContext) {
+        val originalOrientation = if (showAdvancedTimeline) {
+            com.example.ui.OrientationController.requestLandscape(activityContext)
+        } else null
+        onDispose {
+            if (showAdvancedTimeline) {
+                com.example.ui.OrientationController.restoreOrientation(activityContext, originalOrientation)
+            }
+        }
+    }
     var smokeTestVideoPath by remember { mutableStateOf<String?>(null) }
 
     var selectedTab by remember { mutableStateOf(0) }
@@ -288,7 +299,15 @@ fun ChromaProApp(viewModel: MainViewModel = viewModel()) {
                     editorViewModel = editorViewModel,
                     timelinePreviewController = timelinePreviewController,
                     onRelinkRequest = { id -> relinkAssetId = id; relinkLauncher.launch(arrayOf("video/*", "image/*", "audio/*")) },
-                    onClose = { showAdvancedTimeline = false }
+                    onClose = {
+                        val finalState = timelineViewModel.uiState.value
+                        com.example.timeline.core.ActiveProjectManager.activeProject = finalState.project
+                        com.example.timeline.core.ActiveProjectManager.playheadFrame = timelineViewModel.playheadFrame.value
+                        com.example.timeline.core.ActiveProjectManager.selectedClipId = finalState.selectedClipId
+                        com.example.timeline.core.ActiveProjectManager.isDirty = false
+                        timelineViewModel.forceAutosaveProject()
+                        showAdvancedTimeline = false
+                    }
                 )
                 return@Scaffold
             }
@@ -318,8 +337,7 @@ fun ChromaProApp(viewModel: MainViewModel = viewModel()) {
                     com.example.timeline.core.ActiveProjectManager.isDirty = false
                     
                     timelineViewModel.forceAutosaveProject()
-                    val intent = android.content.Intent(context, com.example.timeline.ui.AdvancedTimelineActivity::class.java)
-                    context.startActivity(intent)
+                    showAdvancedTimeline = true
                 }
             )
         }

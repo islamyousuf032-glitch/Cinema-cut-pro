@@ -332,35 +332,39 @@ fun AdvancedTimelineCanvas(
                         layout(constraints.maxWidth, constraints.maxHeight) {
                             var mIndex = 0
                             
-                            if (NativeAdvancedTimelineCore.isAvailable()) {
+                            val layoutData = if (NativeAdvancedTimelineCore.isAvailable()) {
                                 val inputData = mutableListOf<Long>()
                                 uiState.project.tracks.forEachIndexed { trackIndex, track ->
                                     track.clips.forEach { clip ->
                                         val isMoving = dragAction is TimelineDragAction.MoveClip && clip.id == (dragAction as TimelineDragAction.MoveClip).clip.id && activeTool != TimelineTool.SLIP
                                         val isTrimmingStart = dragAction is TimelineDragAction.TrimStart && clip.id == (dragAction as TimelineDragAction.TrimStart).clip.id
                                         val isTrimmingEnd = dragAction is TimelineDragAction.TrimEnd && clip.id == (dragAction as TimelineDragAction.TrimEnd).clip.id
-                                        
+
                                         val effectiveStart = if (isMoving || isTrimmingStart) dragGhostStartFrame ?: clip.timelineStart else clip.timelineStart
                                         val effectiveEnd = if (isTrimmingEnd) dragGhostEndFrame ?: clip.timelineEnd
                                                           else if (isMoving) effectiveStart + (clip.timelineEnd - clip.timelineStart)
                                                           else clip.timelineEnd
-                                        
+
                                         inputData.addAll(listOf(clip.id.hashCode().toLong(), trackIndex.toLong(), effectiveStart, (effectiveEnd - effectiveStart)))
                                     }
                                 }
-                                
+
                                 val startNs = System.nanoTime()
-                                val layoutData = NativeAdvancedTimelineCore.nativeLayoutClipRects(
+                                NativeAdvancedTimelineCore.layoutClipRectsOrNull(
                                     inputData.toLongArray(),
                                     trackHeight, trackPadding, 40.dp.toPx(),
                                     pixelsPerFrame, scrollX
-                                )
-                                val elapsedMs = (System.nanoTime() - startNs) / 1_000_000
-                                NativeTimelineMetrics.reportLayoutTime(elapsedMs)
-                                
+                                ).also { data ->
+                                    if (data != null) {
+                                        NativeTimelineMetrics.reportLayoutTime((System.nanoTime() - startNs) / 1_000_000)
+                                    }
+                                }
+                            } else null
+
+                            if (layoutData != null && layoutData.size >= placeables.size * 5) {
                                 var i = 0
-                                uiState.project.tracks.forEachIndexed { trackIndex, track ->
-                                    track.clips.forEach { clip ->
+                                uiState.project.tracks.forEach { track ->
+                                    track.clips.forEach { _ ->
                                         if (mIndex < placeables.size && i + 4 < layoutData.size) {
                                             val left = layoutData[i + 1].toInt()
                                             val top = layoutData[i + 2].toInt()
@@ -377,7 +381,7 @@ fun AdvancedTimelineCanvas(
                                             val isMoving = dragAction is TimelineDragAction.MoveClip && clip.id == (dragAction as TimelineDragAction.MoveClip).clip.id && activeTool != TimelineTool.SLIP
                                             val isTrimmingStart = dragAction is TimelineDragAction.TrimStart && clip.id == (dragAction as TimelineDragAction.TrimStart).clip.id
                                             val effectiveStart = if (isMoving || isTrimmingStart) dragGhostStartFrame ?: clip.timelineStart else clip.timelineStart
-                                            
+
                                             val left = (NativeAdvancedTimelineCore.frameToX(effectiveStart, pixelsPerFrame) - scrollX).toInt()
                                             val top = (trackIndex * (trackHeight + trackPadding) + 40.dp.toPx()).toInt()
                                             placeables[mIndex].placeRelative(x = left, y = top)

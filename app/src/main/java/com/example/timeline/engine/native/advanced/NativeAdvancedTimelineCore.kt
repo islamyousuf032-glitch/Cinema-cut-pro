@@ -3,20 +3,70 @@ package com.example.timeline.engine.native.advanced
 import android.util.Log
 
 object NativeAdvancedTimelineCore {
-    private var isNativeLoaded = false
+    @Volatile private var isNativeLoaded = false
+    @Volatile private var nativeFailure: String? = null
 
     init {
         try {
             System.loadLibrary("native_advanced_timeline_core")
             isNativeLoaded = true
-        } catch (e: UnsatisfiedLinkError) {
-            if (com.example.BuildConfig.DEBUG) {
-                Log.d("NativeAdvancedTimeline", "Using Kotlin fallback because the native library could not be loaded", e)
-            }
+        } catch (e: LinkageError) {
+            disableNative("native library could not be loaded", e)
         }
     }
 
-    fun isAvailable(): Boolean = isNativeLoaded
+    fun isAvailable(): Boolean = isNativeLoaded && nativeFailure == null
+
+    private fun disableNative(reason: String, error: Throwable) {
+        nativeFailure = reason
+        isNativeLoaded = false
+        if (com.example.BuildConfig.DEBUG) {
+            Log.w("NativeAdvancedTimeline", "Using Kotlin fallback because $reason", error)
+        }
+    }
+
+    private inline fun <T> tryNativeCall(name: String, call: () -> T): T? {
+        if (!isAvailable()) return null
+        return try {
+            call()
+        } catch (error: LinkageError) {
+            disableNative("native call $name is unavailable", error)
+            null
+        } catch (error: RuntimeException) {
+            disableNative("native call $name failed", error)
+            null
+        }
+    }
+
+    fun layoutClipRectsOrNull(
+        inputData: LongArray,
+        trackHeight: Float,
+        trackPadding: Float,
+        topOffset: Float,
+        pixelsPerFrame: Float,
+        scrollX: Float
+    ): FloatArray? = tryNativeCall("layoutClipRects") {
+        nativeLayoutClipRects(inputData, trackHeight, trackPadding, topOffset, pixelsPerFrame, scrollX)
+    }
+
+    fun calculateRulerTicksOrNull(
+        scrollX: Float,
+        viewportWidth: Int,
+        pixelsPerFrame: Float,
+        frameRate: Int
+    ): FloatArray? = tryNativeCall("calculateRulerTicks") {
+        nativeCalculateRulerTicks(scrollX, viewportWidth, pixelsPerFrame, frameRate)
+    }
+
+    fun hitTestClipOrNull(pointerX: Float, pointerY: Float, clipRectsData: FloatArray): FloatArray? =
+        tryNativeCall("hitTestClip") {
+            nativeHitTestClip(pointerX, pointerY, clipRectsData)
+        }
+
+    fun snapFrameOrNull(inputFrame: Long, snapTargets: LongArray, thresholdFrames: Long): Long? =
+        tryNativeCall("snapFrame") {
+            nativeSnapFrame(inputFrame, snapTargets, thresholdFrames)
+        }
 
     external fun nativeFrameToX(frame: Long, pixelsPerFrame: Float): Float
     external fun nativeXToFrame(x: Float, pixelsPerFrame: Float): Long
@@ -30,18 +80,12 @@ object NativeAdvancedTimelineCore {
 
     // Kotlin Fallbacks
     fun frameToX(frame: Long, pixelsPerFrame: Float): Float {
-        if (isAvailable()) {
-            return nativeFrameToX(frame, pixelsPerFrame)
-        }
-        if (com.example.BuildConfig.DEBUG) Log.d("NativeAdvancedTimeline", "Using Kotlin fallback for frameToX")
+        tryNativeCall("frameToX") { nativeFrameToX(frame, pixelsPerFrame) }?.let { return it }
         return frame * pixelsPerFrame
     }
 
     fun xToFrame(x: Float, pixelsPerFrame: Float): Long {
-        if (isAvailable()) {
-            return nativeXToFrame(x, pixelsPerFrame)
-        }
-        if (com.example.BuildConfig.DEBUG) Log.d("NativeAdvancedTimeline", "Using Kotlin fallback for xToFrame")
+        tryNativeCall("xToFrame") { nativeXToFrame(x, pixelsPerFrame) }?.let { return it }
         if (pixelsPerFrame <= 0f) return 0L
         return (x / pixelsPerFrame).toLong()
     }

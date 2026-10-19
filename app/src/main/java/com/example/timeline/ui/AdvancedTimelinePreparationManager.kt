@@ -14,6 +14,11 @@ class AdvancedTimelinePreparationManager {
 
     private val startTime = System.currentTimeMillis()
 
+    fun fail(message: String) {
+        _error.value = message
+        _loadState.value = AdvancedTimelineLoadState.FAILED
+    }
+
     suspend fun prepare() {
         try {
             _loadState.value = AdvancedTimelineLoadState.STARTING

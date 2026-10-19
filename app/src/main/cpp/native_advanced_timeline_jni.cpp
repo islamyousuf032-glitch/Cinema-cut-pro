@@ -24,6 +24,7 @@ Java_com_example_timeline_engine_native_advanced_NativeAdvancedTimelineCore_nati
     int64_t endFrame = 0;
     AdvancedTimelineCore::calculateVisibleFrameRange(scroll_x, viewport_width, pixels_per_frame, startFrame, endFrame);
     jlongArray result = env->NewLongArray(2);
+    if (result == nullptr) return nullptr;
     jlong fill[2] = {startFrame, endFrame};
     env->SetLongArrayRegion(result, 0, 2, fill);
     return result;
@@ -37,7 +38,9 @@ Java_com_example_timeline_engine_native_advanced_NativeAdvancedTimelineCore_nati
 JNIEXPORT jfloatArray JNICALL
 Java_com_example_timeline_engine_native_advanced_NativeAdvancedTimelineCore_nativeLayoutClipRects(JNIEnv *env, jobject thiz, jlongArray input_data, jfloat track_height, jfloat track_padding, jfloat top_offset, jfloat pixels_per_frame, jfloat scroll_x) {
     jsize len = env->GetArrayLength(input_data);
+    if (len == 0 || len % 4 != 0) return env->NewFloatArray(0);
     jlong* data = env->GetLongArrayElements(input_data, nullptr);
+    if (data == nullptr) return nullptr;
     
     std::vector<ClipLayoutInputData> inputs;
     int numClips = len / 4;
@@ -54,7 +57,8 @@ Java_com_example_timeline_engine_native_advanced_NativeAdvancedTimelineCore_nati
 
     std::vector<ClipLayoutRect> rects = TimelineLayoutEngine::layoutClipRects(inputs, track_height, track_padding, top_offset, pixels_per_frame, scroll_x);
     
-    jfloatArray result = env->NewFloatArray(rects.size() * 5);
+    jfloatArray result = env->NewFloatArray(static_cast<jsize>(rects.size() * 5));
+    if (result == nullptr) return nullptr;
     std::vector<jfloat> flat_rects;
     flat_rects.reserve(rects.size() * 5);
     for (const auto& r : rects) {
@@ -64,7 +68,9 @@ Java_com_example_timeline_engine_native_advanced_NativeAdvancedTimelineCore_nati
         flat_rects.push_back(r.right);
         flat_rects.push_back(r.bottom);
     }
-    env->SetFloatArrayRegion(result, 0, flat_rects.size(), flat_rects.data());
+    if (!flat_rects.empty()) {
+        env->SetFloatArrayRegion(result, 0, static_cast<jsize>(flat_rects.size()), flat_rects.data());
+    }
     return result;
 }
 
@@ -72,7 +78,8 @@ JNIEXPORT jfloatArray JNICALL
 Java_com_example_timeline_engine_native_advanced_NativeAdvancedTimelineCore_nativeLayoutTrackRects(JNIEnv *env, jobject thiz, jint num_tracks, jfloat viewport_width, jfloat track_height, jfloat track_padding, jfloat top_offset) {
     std::vector<TrackLayoutRect> rects = TimelineLayoutEngine::layoutTrackRects(num_tracks, viewport_width, track_height, track_padding, top_offset);
     
-    jfloatArray result = env->NewFloatArray(rects.size() * 5);
+    jfloatArray result = env->NewFloatArray(static_cast<jsize>(rects.size() * 5));
+    if (result == nullptr) return nullptr;
     std::vector<jfloat> flat_rects;
     flat_rects.reserve(rects.size() * 5);
     for (const auto& r : rects) {
@@ -82,21 +89,26 @@ Java_com_example_timeline_engine_native_advanced_NativeAdvancedTimelineCore_nati
         flat_rects.push_back(r.right);
         flat_rects.push_back(r.bottom);
     }
-    env->SetFloatArrayRegion(result, 0, flat_rects.size(), flat_rects.data());
+    if (!flat_rects.empty()) {
+        env->SetFloatArrayRegion(result, 0, static_cast<jsize>(flat_rects.size()), flat_rects.data());
+    }
     return result;
 }
 
 JNIEXPORT jfloatArray JNICALL
 Java_com_example_timeline_engine_native_advanced_NativeAdvancedTimelineCore_nativeCalculateRulerTicks(JNIEnv *env, jobject thiz, jfloat scroll_x, jint viewport_width, jfloat pixels_per_frame, jint frame_rate) {
     std::vector<AdvancedRulerTick> ticks = TimelineLayoutEngine::calculateTimelineRulerTicks(scroll_x, viewport_width, pixels_per_frame, frame_rate);
-    jfloatArray result = env->NewFloatArray(ticks.size() * 2);
+    jfloatArray result = env->NewFloatArray(static_cast<jsize>(ticks.size() * 2));
+    if (result == nullptr) return nullptr;
     std::vector<jfloat> flat_ticks;
     flat_ticks.reserve(ticks.size() * 2);
     for (const auto& t : ticks) {
         flat_ticks.push_back(t.x);
         flat_ticks.push_back(static_cast<float>(t.type));
     }
-    env->SetFloatArrayRegion(result, 0, flat_ticks.size(), flat_ticks.data());
+    if (!flat_ticks.empty()) {
+        env->SetFloatArrayRegion(result, 0, static_cast<jsize>(flat_ticks.size()), flat_ticks.data());
+    }
     return result;
 }
 
@@ -107,7 +119,9 @@ extern "C" {
 JNIEXPORT jfloatArray JNICALL
 Java_com_example_timeline_engine_native_advanced_NativeAdvancedTimelineCore_nativeHitTestClip(JNIEnv *env, jobject thiz, jfloat pointer_x, jfloat pointer_y, jfloatArray clip_rects_data) {
     jsize len = env->GetArrayLength(clip_rects_data);
-    jfloat* data = env->GetFloatArrayElements(clip_rects_data, nullptr);
+    if (len % 5 != 0) len -= len % 5;
+    jfloat* data = len > 0 ? env->GetFloatArrayElements(clip_rects_data, nullptr) : nullptr;
+    if (len > 0 && data == nullptr) return nullptr;
     
     std::vector<ClipLayoutRect> clipRects;
     int numClips = len / 5;
@@ -121,10 +135,11 @@ Java_com_example_timeline_engine_native_advanced_NativeAdvancedTimelineCore_nati
             data[i * 5 + 4]
         });
     }
-    env->ReleaseFloatArrayElements(clip_rects_data, data, JNI_ABORT);
+    if (data != nullptr) env->ReleaseFloatArrayElements(clip_rects_data, data, JNI_ABORT);
 
     AdvHitTestResult hit = AdvancedTimelineHitTest::hitTestClip(pointer_x, pointer_y, clipRects);
     jfloatArray result = env->NewFloatArray(3);
+    if (result == nullptr) return nullptr;
     jfloat resultData[3] = {hit.hit ? 1.0f : 0.0f, static_cast<float>(hit.clipId), static_cast<float>(hit.trackIndex)};
     env->SetFloatArrayRegion(result, 0, 3, resultData);
     return result;
@@ -133,7 +148,9 @@ Java_com_example_timeline_engine_native_advanced_NativeAdvancedTimelineCore_nati
 JNIEXPORT jlong JNICALL
 Java_com_example_timeline_engine_native_advanced_NativeAdvancedTimelineCore_nativeSnapFrame(JNIEnv *env, jobject thiz, jlong input_frame, jlongArray snap_targets, jlong threshold_frames) {
     jsize len = env->GetArrayLength(snap_targets);
+    if (len == 0) return input_frame;
     jlong* data = env->GetLongArrayElements(snap_targets, nullptr);
+    if (data == nullptr) return input_frame;
     
     std::vector<int64_t> targets;
     targets.reserve(len);

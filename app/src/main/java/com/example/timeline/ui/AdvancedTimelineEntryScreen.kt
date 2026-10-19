@@ -12,6 +12,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -53,6 +54,8 @@ fun AdvancedTimelineEntryScreen(
     
     val uiState by timelineViewModel.uiState.collectAsState()
     val playheadFrame by timelineViewModel.playheadFrame.collectAsState()
+    val latestUiState = rememberUpdatedState(uiState)
+    val latestPlayheadFrame = rememberUpdatedState(playheadFrame)
     
     LaunchedEffect(Unit) {
         val activeProject = ActiveProjectManager.activeProject
@@ -65,17 +68,16 @@ fun AdvancedTimelineEntryScreen(
             // Run the detailed preparation steps
             preparationManager.prepare()
         } else {
-            // Can't run manager if no project
-            // We just let the UI handle this as a failure state directly or let the manager fail
+            preparationManager.fail("Project not found in memory. Close Pro Timeline and reopen it from the editor.")
         }
     }
     
     // Sync back to ActiveProjectManager on close/dispose
     DisposableEffect(Unit) {
         onDispose {
-            ActiveProjectManager.activeProject = uiState.project
-            ActiveProjectManager.playheadFrame = playheadFrame
-            ActiveProjectManager.selectedClipId = uiState.selectedClipId
+            ActiveProjectManager.activeProject = latestUiState.value.project
+            ActiveProjectManager.playheadFrame = latestPlayheadFrame.value
+            ActiveProjectManager.selectedClipId = latestUiState.value.selectedClipId
             ActiveProjectManager.isDirty = true
         }
     }

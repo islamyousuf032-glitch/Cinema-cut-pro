@@ -35,15 +35,20 @@ fun AdvancedTimelineRuler(
             strokeWidth = 1.dp.toPx()
         )
 
-        if (NativeAdvancedTimelineCore.isAvailable()) {
-            val ticks = NativeAdvancedTimelineCore.nativeCalculateRulerTicks(scrollX, width.toInt(), pixelsPerFrame, frameRate.toFloat().toInt())
+        val ticks = NativeAdvancedTimelineCore.calculateRulerTicksOrNull(
+            scrollX,
+            width.toInt(),
+            pixelsPerFrame,
+            frameRate.toFloat().toInt()
+        )
+        if (ticks != null && ticks.size % 2 == 0) {
             var i = 0
             while (i + 1 < ticks.size) {
                 val tickX = ticks[i]
                 val type = ticks[i + 1].toInt()
                 
                 if (tickX in 0f..width) {
-                    val isMajor = type == 2
+                    val isMajor = type == 1
                     val tickHeight = if (isMajor) height * 0.5f else height * 0.25f
                     val yStart = height - tickHeight
                     
