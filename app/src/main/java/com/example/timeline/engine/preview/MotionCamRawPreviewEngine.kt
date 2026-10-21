@@ -97,10 +97,10 @@ class MotionCamRawPreviewEngine(private val context: Context) : PreviewEngine {
         playbackJob = null
         loadJob?.cancel()
         _currentError.value = null
-        if (uriChanged) {
+        if (uriChanged || !_firstFrameRendered.value) {
             _currentState.value = PreviewState.LOADING
             _firstFrameRendered.value = false
-            _currentBitmap.value = null
+            if (uriChanged) _currentBitmap.value = null
         }
 
         val targetPositionMs = sourcePositionMs.coerceAtLeast(0L)
@@ -112,7 +112,8 @@ class MotionCamRawPreviewEngine(private val context: Context) : PreviewEngine {
                         if (frameTimestampsNs.isEmpty()) throw IllegalStateException("MotionCam recording contains no frames")
                         val targetNs = targetPositionMs.coerceAtMost(Long.MAX_VALUE / 1_000_000L) * 1_000_000L
                         val index = nearestFrameIndex(frameTimestampsNs, targetNs)
-                        val bitmap = decodeFrame(index)
+                        val maximumEdge = if (resumePlayback) PLAYBACK_MAX_EDGE else STILL_MAX_EDGE
+                        val bitmap = decodeFrame(index, maximumEdge)
                         val timestampUs = frameTimestampsNs[index] / 1_000L
                         currentFrameIndex = index
                         currentPositionUsValue = timestampUs
@@ -164,8 +165,8 @@ class MotionCamRawPreviewEngine(private val context: Context) : PreviewEngine {
         }
     }
 
-    private fun decodeFrame(index: Int): Bitmap {
-        val decoded = NativeMcrawDecoder.decodeFrame(handle, index, PREVIEW_MAX_EDGE)
+    private fun decodeFrame(index: Int, maximumEdge: Int = STILL_MAX_EDGE): Bitmap {
+        val decoded = NativeMcrawDecoder.decodeFrame(handle, index, maximumEdge)
         val rotation = runCatching {
             JSONObject(NativeMcrawDecoder.frameMetadataJson(handle, index))
                 .optInt("rotationDegrees", 0)
@@ -176,32 +177,61 @@ class MotionCamRawPreviewEngine(private val context: Context) : PreviewEngine {
         return Bitmap.createBitmap(decoded, 0, 0, decoded.width, decoded.height, matrix, true)
     }
 
+    /** Uses source timestamps as a wall-clock target and skips missed frames instead of slowing the clip. */
     private fun startPlaybackLoop() {
         if (released || playbackJob?.isActive == true || frameTimestampsNs.isEmpty()) return
         playWhenReady = false
         playbackJob = scope.launch {
             _currentState.value = PreviewState.PLAYING
-            while (!released && currentFrameIndex < frameTimestampsNs.lastIndex) {
-                val nextIndex = currentFrameIndex + 1
-                val delayForFrameMs = frameIntervalMs(currentFrameIndex, nextIndex)
-                val decodeStartedAt = System.nanoTime()
+            val playbackStartWallNs = System.nanoTime()
+            val playbackStartMediaNs = frameTimestampsNs[currentFrameIndex]
+            val durationNs = durationUsValue.coerceAtLeast(0L) * 1_000L
+
+            while (!released) {
                 try {
+                    val elapsedWallNs = (System.nanoTime() - playbackStartWallNs).coerceAtLeast(0L)
+                    val speed = playbackSpeed.coerceIn(0.1f, 4f)
+                    val elapsedMediaNs = (elapsedWallNs.toDouble() * speed.toDouble())
+                        .coerceAtMost(Long.MAX_VALUE.toDouble()).toLong()
+                    val targetMediaNs = if (elapsedMediaNs > Long.MAX_VALUE - playbackStartMediaNs) {
+                        Long.MAX_VALUE
+                    } else {
+                        playbackStartMediaNs + elapsedMediaNs
+                    }
+
+                    if (targetMediaNs >= durationNs || currentFrameIndex >= frameTimestampsNs.lastIndex) {
+                        if (targetMediaNs < durationNs && currentFrameIndex >= frameTimestampsNs.lastIndex) {
+                            val remainingNs = durationNs - targetMediaNs
+                            delay((remainingNs / 1_000_000.0 / speed).toLong().coerceIn(1L, 50L))
+                            continue
+                        }
+                        currentPositionUsValue = durationUsValue
+                        onTimeChanged?.invoke(durationUsValue)
+                        _currentState.value = PreviewState.READY
+                        return@launch
+                    }
+
+                    val targetIndex = nearestFrameIndex(frameTimestampsNs, targetMediaNs)
+                    if (targetIndex <= currentFrameIndex) {
+                        val nextIndex = (currentFrameIndex + 1).coerceAtMost(frameTimestampsNs.lastIndex)
+                        val untilNextNs = (frameTimestampsNs[nextIndex] - targetMediaNs).coerceAtLeast(1L)
+                        delay((untilNextNs / 1_000_000.0 / speed).toLong().coerceIn(1L, 50L))
+                        continue
+                    }
+
                     val frameAndTime = withContext(Dispatchers.IO) {
                         decoderMutex.withLock {
                             if (handle == 0L) throw IllegalStateException("MotionCam decoder is closed")
-                            val bitmap = decodeFrame(nextIndex)
-                            currentFrameIndex = nextIndex
-                            currentPositionUsValue = frameTimestampsNs[nextIndex] / 1_000L
+                            val bitmap = decodeFrame(targetIndex, PLAYBACK_MAX_EDGE)
+                            currentFrameIndex = targetIndex
+                            currentPositionUsValue = frameTimestampsNs[targetIndex] / 1_000L
                             bitmap to currentPositionUsValue
                         }
                     }
-                    if (released) break
+                    if (released) return@launch
                     _currentBitmap.value = frameAndTime.first
                     _firstFrameRendered.value = true
                     onTimeChanged?.invoke(frameAndTime.second)
-                    val decodeElapsedMs = (System.nanoTime() - decodeStartedAt) / 1_000_000L
-                    val waitMs = (delayForFrameMs - decodeElapsedMs).coerceAtLeast(0L)
-                    if (waitMs > 0L) delay(waitMs)
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (error: Exception) {
@@ -210,19 +240,7 @@ class MotionCamRawPreviewEngine(private val context: Context) : PreviewEngine {
                     return@launch
                 }
             }
-            if (!released && currentFrameIndex >= frameTimestampsNs.lastIndex) {
-                currentPositionUsValue = durationUsValue
-                onTimeChanged?.invoke(durationUsValue)
-                _currentState.value = PreviewState.READY
-            }
         }
-    }
-
-    private fun frameIntervalMs(from: Int, to: Int): Long {
-        if (from !in frameTimestampsNs.indices || to !in frameTimestampsNs.indices) return 33L
-        val intervalNs = (frameTimestampsNs[to] - frameTimestampsNs[from]).coerceAtLeast(1L)
-        return (intervalNs / 1_000_000.0 / playbackSpeed.coerceIn(0.1f, 4f))
-            .toLong().coerceIn(1L, 250L)
     }
 
     override fun play() {
@@ -339,6 +357,7 @@ class MotionCamRawPreviewEngine(private val context: Context) : PreviewEngine {
     }
 
     companion object {
-        private const val PREVIEW_MAX_EDGE = 960
+        private const val STILL_MAX_EDGE = 960
+        private const val PLAYBACK_MAX_EDGE = 640
     }
 }

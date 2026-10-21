@@ -4,7 +4,7 @@
 
 `.mcraw` documents are recognized by their original filename, MIME type, or the MotionCam container signature. They are imported as video assets, analyzed with the vendored MotionCam C++ decoder, and routed to a dedicated native preview engine. ExoPlayer and LibVLC remain available and unchanged for ordinary media; neither is used to parse a `.mcraw` recording.
 
-The preview path decodes one 16-bit Bayer frame at a time and renders a bounded (up to 960 px on the longest edge) bilinear demosaic. It uses the recording's CFA pattern, black/white levels, white balance, and forward color matrix when those fields are present. Frame timestamps are normalized relative to the first video frame for timeline seeking. This lightweight conversion is an editing preview, **not** a full MotionCam ISP or a color-accurate RAW development pipeline.
+The preview path decodes one 16-bit Bayer frame at a time and renders a bilinear demosaic (up to 960 px on the longest edge while paused/scrubbing; 640 px during playback). It uses the recording's CFA pattern, black/white levels, white balance, and forward color matrix when those fields are present. Frame timestamps are normalized relative to the first video frame. During playback it follows source time and skips late frames rather than making the clip run slower when decoding cannot keep up. This lightweight conversion is an editing preview, **not** a full MotionCam ISP or a color-accurate RAW development pipeline.
 
 The decoder sources are pinned to upstream `mirsadm/motioncam-decoder` commit `b931ec0e2466c8217c49f13df925531b78f76e33`. License summaries and bundled dependency notices are in `app/src/main/cpp/third_party/motioncam_decoder/THIRD_PARTY_NOTICES.md`.
 
