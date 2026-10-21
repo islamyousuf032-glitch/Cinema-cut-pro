@@ -22,6 +22,21 @@ class MediaImportDecisionEngine {
         val warnings = mutableListOf<String>()
         var userMessage = "Media is ready."
 
+        if (formatIdentifiers.contains("motioncam-raw") || formatIdentifiers.contains(".mcraw")) {
+            return MediaStatusResult(
+                previewStatus = PreviewStatus.DIRECT_SUPPORTED_PROBABLE,
+                proxyStatus = ProxyStatus.NONE,
+                report = ImportTechnicalReport(
+                    detectedFormat = MotionCamRawFormat.MIME_TYPE,
+                    directPlaybackSupport = true,
+                    proxyRecommendation = false,
+                    transcodeRecommendation = false,
+                    warnings = listOf("Native MotionCam RAW preview is available; camera color and real-time performance still require device validation."),
+                    userFriendlyMessage = "MotionCam RAW is ready for native preview."
+                )
+            )
+        }
+
         if (mimeType.startsWith("audio/") || mimeType.startsWith("image/")) {
             return MediaStatusResult(
                 previewStatus = PreviewStatus.DIRECT_SUPPORTED_PROBABLE,

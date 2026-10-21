@@ -38,6 +38,9 @@ object PreviewEngineFactory {
             PreviewEngineType.NATIVE_CPP -> {
                 return com.example.timeline.engine.preview.native.NativeCppPreviewEngine()
             }
+            PreviewEngineType.MOTIONCAM_RAW -> {
+                return MotionCamRawPreviewEngine(context)
+            }
             PreviewEngineType.PROXY_PREVIEW -> {
                 // Proxy is a source-selection policy, not a distinct decoder. AUTO/Media3 handles it.
                 return Media3FallbackPreviewEngine(context)

@@ -15,6 +15,10 @@ class AndroidMediaAnalyzer(
 ) : MediaAnalyzer {
 
     override suspend fun analyze(asset: MediaAsset, uri: Uri): MediaAsset = withContext(Dispatchers.IO) {
+        if (MotionCamRawFormat.isCandidate(context, asset, uri)) {
+            return@withContext McrawMediaAnalyzer(context).analyze(asset, uri)
+        }
+
         val retriever = MediaMetadataRetriever()
         val extractor = MediaExtractor()
 

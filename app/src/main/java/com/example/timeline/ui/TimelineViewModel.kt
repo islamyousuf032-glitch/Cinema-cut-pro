@@ -215,7 +215,8 @@ class TimelineViewModel(context: Context) : ViewModel() {
                 if (initialAsset != null) {
                     val currentProject = _uiState.value.project
                     
-                    val isVideo = initialAsset.mimeType.startsWith("video/")
+                    val isVideo = initialAsset.assetType == com.example.timeline.media.MediaAssetType.VIDEO ||
+                        initialAsset.mimeType.startsWith("video/")
                     val prefix = if (isVideo) "Video " else "Audio "
                     val currentCount = currentProject.mediaAssets.count { it.displayName.startsWith(prefix) }
                     val newName = "$prefix${currentCount + 1}"

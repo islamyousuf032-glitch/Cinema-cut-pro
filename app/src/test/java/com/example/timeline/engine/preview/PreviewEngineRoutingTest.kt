@@ -13,6 +13,14 @@ class PreviewEngineRoutingTest {
     }
 
     @Test
+    fun motionCamRawHasDedicatedNativePreviewRoute() {
+        assertEquals(
+            PreviewEngineType.MOTIONCAM_RAW,
+            resolveRequestedPreviewEngine(PreviewEngineType.MOTIONCAM_RAW)
+        )
+    }
+
+    @Test
     fun explicitLegacyLibVlcPreferenceRemainsAvailable() {
         assertEquals(
             PreviewEngineType.FFMPEG_NATIVE,

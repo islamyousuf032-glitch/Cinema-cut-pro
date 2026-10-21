@@ -2,13 +2,13 @@
 
 Cinema Cut Pro is a native Android video-editor prototype built with Kotlin, Jetpack Compose, and a small C++/JNI layer. The repository contains substantial editor, timeline, color, media, and export code, but these subsystems are at different completion levels.
 
-> **Current status:** prototype / active development. `AUTO` preview now routes to Media3 ExoPlayer for standard Android-compatible media; the existing LibVLC 3.5.1 Java API remains an explicit manual fallback. A bounded Media3 Transformer adapter supports trims in a sequential, single-visible-video-track H.264/MP4 export with strict validation and cancellation, but it is not a full NLE renderer. The Android debug build, JVM tests, and native host tests passed in [GitHub Actions run 39122394286](https://github.com/islamyousuf032-glitch/Cinema-cut-pro/actions/runs/39122394286); target-device validation with representative media and Logcat remains outstanding. Format support depends on Android platform extractors/decoders; there is no universal-format or `.mcraw` support claim. Multi-layer compositing, full color-grade export, multitrack audio, crossfades, and HDR are not implemented by this path. See [preview/export scope and validation](docs/MEDIA3_PREVIEW_AND_EXPORT.md), [the source review](docs/PROJECT_REVIEW.md), and [development roadmap](docs/ROADMAP.md).
+> **Current status:** prototype / active development. `AUTO` preview now routes to Media3 ExoPlayer for standard Android-compatible media; the existing LibVLC 3.5.1 Java API remains an explicit manual fallback. A bounded Media3 Transformer adapter supports trims in a sequential, single-visible-video-track H.264/MP4 export with strict validation and cancellation, but it is not a full NLE renderer. The Android debug build, JVM tests, and native host tests passed in [GitHub Actions run 39122394286](https://github.com/islamyousuf032-glitch/Cinema-cut-pro/actions/runs/39122394286); target-device validation with representative media and Logcat remains outstanding. Standard-format support depends on Android platform extractors/decoders; experimental arm64 native MotionCam Pro `.mcraw` import and Bayer-frame preview have been added, but still require an Android build and physical-device validation. The RAW path does not yet support proxy generation, embedded-audio playback/export, or `.mcraw` export. Multi-layer compositing, full color-grade export, multitrack audio, crossfades, and HDR are not implemented by the standard export path. See [MotionCam RAW scope and limitations](docs/MOTIONCAM_RAW.md), [preview/export scope and validation](docs/MEDIA3_PREVIEW_AND_EXPORT.md), [the source review](docs/PROJECT_REVIEW.md), and [development roadmap](docs/ROADMAP.md).
 
 ## What is in the codebase
 
 - Portrait editor and a separate landscape advanced-timeline workspace.
 - Project, track, clip, edit-command, undo/redo, autosave, and versioning models.
-- Media import/analysis, Media3 ExoPlayer primary preview with SAF/MIME-aware source handling, explicit legacy LibVLC fallback, and proxy-generation scaffolding.
+- Media import/analysis, Media3 ExoPlayer primary preview with SAF/MIME-aware source handling, explicit legacy LibVLC fallback, proxy-generation scaffolding, and experimental native MotionCam Pro `.mcraw` frame preview.
 - Transform/keyframe and color-adjustment/color-grade models and UI.
 - A bounded Media3 Transformer H.264/MP4 cut-only export adapter for compatible contiguous CFR clips on one visible video track; it trims, validates unsupported edits, reports progress, and supports cancellation. Crossfades and broader NLE compositions are not implemented. It remains unverified on target devices.
 - A Gemini text endpoint intended for color-grading advice. This is **not** a text-to-video or video-generation model.
@@ -71,6 +71,7 @@ GEMINI_API_KEY=your_key_here
 
 - [Source review and architecture map](docs/PROJECT_REVIEW.md)
 - [Media3 preview/export scope and validation notes](docs/MEDIA3_PREVIEW_AND_EXPORT.md)
+- [MotionCam RAW scope and limitations](docs/MOTIONCAM_RAW.md)
 - [Prioritized development roadmap](docs/ROADMAP.md)
 - [Documentation index](docs/README.md)
 - [Imported source archive notes](archives/README.md)

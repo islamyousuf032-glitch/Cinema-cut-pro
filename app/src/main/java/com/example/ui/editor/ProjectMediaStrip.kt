@@ -17,7 +17,11 @@ fun ProjectMediaStrip(
     com.example.timeline.ui.MediaBinPanel(
         mediaAssets = mediaAssets,
         proxyProgressMap = proxyProgressMap,
-        onImportVideoClick = { launchers.videoLauncher.launch(arrayOf("video/*")) },
+        onImportVideoClick = {
+            launchers.videoLauncher.launch(
+                arrayOf("video/*", com.example.timeline.media.MotionCamRawFormat.MIME_TYPE, "application/octet-stream")
+            )
+        },
         onImportAudioClick = { launchers.audioLauncher.launch(arrayOf("audio/*")) },
         onImportImageClick = { launchers.imageLauncher.launch(arrayOf("image/*")) },
         onImportImageSequenceClick = { launchers.imageSequenceLauncher.launch(arrayOf("image/*")) },

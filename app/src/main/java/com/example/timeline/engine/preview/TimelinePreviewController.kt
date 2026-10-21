@@ -31,6 +31,7 @@ class TimelinePreviewController(private val context: Context) {
 
     private var activeProject: TimelineProject? = null
     private var lastPlayheadFrame: Long = 0L
+    private var preferredEngineType: PreviewEngineType = PreviewEngineType.AUTO
     @Volatile private var colorGradeBypassed: Boolean = false
     @Volatile private var configuredPreferProxyPlayback: Boolean = true
     @Volatile private var preferProxyPlayback: Boolean = true
@@ -195,6 +196,18 @@ class TimelinePreviewController(private val context: Context) {
 
     fun setEngineType(type: PreviewEngineType) {
         if (released) return
+        if (type != PreviewEngineType.MOTIONCAM_RAW) preferredEngineType = type
+        val activeAsset = _activeAsset.value
+        val actualType = if (activeAsset != null && com.example.timeline.media.MotionCamRawFormat.isMcrawAsset(activeAsset)) {
+            PreviewEngineType.MOTIONCAM_RAW
+        } else {
+            type
+        }
+        switchEngineType(actualType)
+    }
+
+    private fun switchEngineType(type: PreviewEngineType) {
+        if (released) return
         val requestedEngine = resolveRequestedPreviewEngine(type)
         if (previewEngine.engineType == requestedEngine) return
 
@@ -283,6 +296,8 @@ class TimelinePreviewController(private val context: Context) {
             val eng = previewEngine
             if (eng is Media3FallbackPreviewEngine) {
                 eng.clearMedia()
+            } else if (eng is MotionCamRawPreviewEngine) {
+                eng.clearMedia()
             }
             return
         }
@@ -298,7 +313,19 @@ class TimelinePreviewController(private val context: Context) {
             val eng = previewEngine
             if (eng is Media3FallbackPreviewEngine) {
                 eng.clearMedia()
+            } else if (eng is MotionCamRawPreviewEngine) {
+                eng.clearMedia()
             }
+            return
+        }
+
+        val isMcraw = com.example.timeline.media.MotionCamRawFormat.isMcrawAsset(asset)
+        if (isMcraw && previewEngine.engineType != PreviewEngineType.MOTIONCAM_RAW) {
+            switchEngineType(PreviewEngineType.MOTIONCAM_RAW)
+            return
+        }
+        if (!isMcraw && previewEngine.engineType == PreviewEngineType.MOTIONCAM_RAW) {
+            switchEngineType(preferredEngineType)
             return
         }
 
@@ -347,7 +374,10 @@ class TimelinePreviewController(private val context: Context) {
     fun stop() {
         previewEngine.pause()
         val eng = previewEngine
-        if (eng is Media3FallbackPreviewEngine) eng.clearMedia()
+        when (eng) {
+            is Media3FallbackPreviewEngine -> eng.clearMedia()
+            is MotionCamRawPreviewEngine -> eng.clearMedia()
+        }
     }
     
     suspend fun extractCurrentFrameBitmap(): android.graphics.Bitmap? {
@@ -358,14 +388,59 @@ class TimelinePreviewController(private val context: Context) {
         val sourceFrame = TimelineFrameResolver.resolveSourceFrame(lastPlayheadFrame, clip)
         val sourceTimeUs = TimelineFrameResolver.convertFrameToMicroseconds(sourceFrame, rat.numerator, rat.denominator)
         return kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-            val mmr = android.media.MediaMetadataRetriever()
-            try {
-                mmr.setDataSource(context, android.net.Uri.parse(uriStr))
-                mmr.getFrameAtTime(sourceTimeUs, android.media.MediaMetadataRetriever.OPTION_CLOSEST)
-            } catch (e: Exception) {
-                null
-            } finally {
-                mmr.release()
+            if (com.example.timeline.media.MotionCamRawFormat.isMcrawAsset(asset)) {
+                var handle = 0L
+                try {
+                    handle = com.example.timeline.media.NativeMcrawDecoder.open(context, android.net.Uri.parse(uriStr))
+                    val frameCount = com.example.timeline.media.NativeMcrawDecoder.frameCount(handle)
+                    if (frameCount <= 0) return@withContext null
+                    val targetNs = sourceTimeUs.coerceAtLeast(0L).coerceAtMost(Long.MAX_VALUE / 1_000L) * 1_000L
+                    val rawTimestamps = LongArray(frameCount) { index ->
+                        com.example.timeline.media.NativeMcrawDecoder.frameTimestampNs(handle, index)
+                    }
+                    val timestampOrigin = rawTimestamps.firstOrNull() ?: 0L
+                    val timestamps = LongArray(frameCount) { index ->
+                        (rawTimestamps[index] - timestampOrigin).coerceAtLeast(0L)
+                    }
+                    var low = 0
+                    var high = timestamps.lastIndex
+                    while (low < high) {
+                        val middle = (low + high) ushr 1
+                        if (timestamps[middle] < targetNs) low = middle + 1 else high = middle
+                    }
+                    val next = low
+                    val previous = (next - 1).coerceAtLeast(0)
+                    val selected = if (kotlin.math.abs(targetNs - timestamps[previous]) <= kotlin.math.abs(timestamps[next] - targetNs)) previous else next
+                    val decoded = com.example.timeline.media.NativeMcrawDecoder.decodeFrame(handle, selected, 960)
+                    val rotation = runCatching {
+                        org.json.JSONObject(com.example.timeline.media.NativeMcrawDecoder.frameMetadataJson(handle, selected))
+                            .optInt("rotationDegrees", 0)
+                            .let { ((it % 360) + 360) % 360 }
+                    }.getOrDefault(0)
+                    if (rotation == 0) decoded else android.graphics.Bitmap.createBitmap(
+                        decoded,
+                        0,
+                        0,
+                        decoded.width,
+                        decoded.height,
+                        android.graphics.Matrix().apply { postRotate(rotation.toFloat()) },
+                        true
+                    )
+                } catch (_: Exception) {
+                    null
+                } finally {
+                    if (handle != 0L) com.example.timeline.media.NativeMcrawDecoder.close(handle)
+                }
+            } else {
+                val mmr = android.media.MediaMetadataRetriever()
+                try {
+                    mmr.setDataSource(context, android.net.Uri.parse(uriStr))
+                    mmr.getFrameAtTime(sourceTimeUs, android.media.MediaMetadataRetriever.OPTION_CLOSEST)
+                } catch (e: Exception) {
+                    null
+                } finally {
+                    mmr.release()
+                }
             }
         }
     }

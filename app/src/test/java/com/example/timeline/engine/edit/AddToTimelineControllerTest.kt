@@ -57,6 +57,26 @@ class AddToTimelineControllerTest {
     )
 
     @Test
+    fun motionCamRawAssetWithCustomMimeCreatesVideoClip() {
+        val mcrawAsset = videoAsset().copy(
+            displayName = "Video 1",
+            mimeType = com.example.timeline.media.MotionCamRawFormat.MIME_TYPE,
+            assetType = MediaAssetType.VIDEO,
+            metadata = videoAsset().metadata.copy(hasVideo = true, hasAudio = true)
+        )
+
+        val (updated, clip) = AddToTimelineController.createAddClipCommand(
+            project = project(),
+            mediaAsset = mcrawAsset,
+            playheadFrame = 20L
+        )
+
+        assertEquals(TrackType.VIDEO, updated.tracks.single().type)
+        assertEquals(mcrawAsset.assetId, clip.mediaId)
+        assertEquals(0L, clip.timelineStart)
+    }
+
+    @Test
     fun firstImportedVideoStartsAtFrameZeroEvenWhenPlayheadIsNotAtZero() {
         val (_, clip) = AddToTimelineController.createAddClipCommand(
             project = project(),

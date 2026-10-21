@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -74,6 +75,24 @@ fun PlayerViewContainer(
     Box(modifier = modifier.fillMaxSize()) {
         ViewportTransformLayer(renderState = renderState, colorFilter = currentColorFilter) {
             when (previewEngine) {
+                is MotionCamRawPreviewEngine -> {
+                    val bitmap = previewEngine.currentBitmap.collectAsState().value
+                    AndroidView(
+                        factory = { ctx ->
+                            android.widget.ImageView(ctx).apply {
+                                scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
+                                setBackgroundColor(android.graphics.Color.BLACK)
+                            }
+                        },
+                        update = { view ->
+                            if (view.tag !== bitmap) {
+                                view.setImageBitmap(bitmap)
+                                view.tag = bitmap
+                            }
+                        },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
                 is com.example.timeline.engine.preview.browser.BrowserPreviewEngine -> {
                     AndroidView(
                         factory = { _ ->

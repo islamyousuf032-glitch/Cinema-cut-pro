@@ -4,9 +4,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.unit.dp
 import com.example.timeline.core.TimelineClip
 import com.example.timeline.core.TimelineProject
 import com.example.timeline.core.transform.ClipTransform
@@ -84,12 +86,13 @@ fun CleanVideoCanvas(
         ) {
             if (currentAsset != null && currentClip != null) {
                 val isReady = playerState == com.example.timeline.engine.preview.PreviewState.READY || playerState == com.example.timeline.engine.preview.PreviewState.PLAYING
+                val isMcraw = com.example.timeline.media.MotionCamRawFormat.isMcrawAsset(currentAsset)
                 val requiresProxy = currentAsset.proxyStatus == ProxyStatus.REQUIRED ||
                     currentAsset.previewStatus == PreviewStatus.PROXY_REQUIRED ||
                     currentAsset.previewStatus == PreviewStatus.UNSUPPORTED ||
                     currentAsset.previewStatus == PreviewStatus.STILL_FRAME_ONLY
                 val hasProxy = currentAsset.proxyStatus == ProxyStatus.READY && currentAsset.proxyPlaybackFailure.isNullOrBlank()
-                val needsStillFrame = !isReady && (
+                val needsStillFrame = !isMcraw && !isReady && (
                     (requiresProxy && !hasProxy) ||
                         currentAsset.previewStatus == PreviewStatus.DIRECT_FAILED_RUNTIME ||
                         playerError != null
@@ -130,6 +133,19 @@ fun CleanVideoCanvas(
                         onSwitchEngine = { type -> controller.setEngineType(type) },
                         modifier = Modifier.fillMaxSize()
                     )
+                }
+
+                if (isMcraw && playerError != null && currentAsset.mediaErrorStatus == MediaErrorStatus.NONE) {
+                    Box(
+                        modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.82f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        androidx.compose.material3.Text(
+                            text = "MotionCam RAW preview unavailable\n\n$playerError",
+                            color = Color.White,
+                            modifier = Modifier.padding(24.dp)
+                        )
+                    }
                 }
 
                 TransformHandleOverlay(

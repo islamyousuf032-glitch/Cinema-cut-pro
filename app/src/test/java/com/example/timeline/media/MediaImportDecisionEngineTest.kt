@@ -20,6 +20,28 @@ class MediaImportDecisionEngineTest {
     }
 
     @Test
+    fun motionCamRawRoutesToNativePreviewWithoutSchedulingUnsupportedMedia3Proxy() {
+        val base = analysis(width = 3840, height = 2160, frameRate = 30f)
+        val mcrawStream = base.videoStreams.single().copy(
+            codecName = "motioncam-raw",
+            codecMime = MotionCamRawFormat.MIME_TYPE,
+            softwareDecodeSupported = true,
+            requiresProxy = false,
+            requiresTranscode = false
+        )
+
+        val result = decisionEngine.decideImportStatus(
+            base.copy(defaultMimeType = MotionCamRawFormat.MIME_TYPE, videoStreams = listOf(mcrawStream))
+        )
+
+        assertEquals(PreviewStatus.DIRECT_SUPPORTED_PROBABLE, result.previewStatus)
+        assertEquals(ProxyStatus.NONE, result.proxyStatus)
+        assertTrue(result.report.directPlaybackSupport)
+        assertFalse(result.report.proxyRecommendation)
+        assertFalse(result.report.transcodeRecommendation)
+    }
+
+    @Test
     fun softwareOnlyDecoderRecommendsProxyWithoutCallingFormatUnsupported() {
         val result = decisionEngine.decideImportStatus(
             analysis(width = 1280, height = 720, frameRate = 30f, software = true)

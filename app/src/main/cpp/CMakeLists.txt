@@ -32,6 +32,36 @@ find_library(
         jnigraphics-lib
         jnigraphics)
 
+# MotionCam Pro .mcraw decoder. The decoder itself is upstream C++17; the
+# small Android-only JNI wrapper exposes RAW frames and metadata to Kotlin.
+set(MOTIONCAM_DECODER_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/third_party/motioncam_decoder)
+add_library(
+        motioncam_decoder
+        STATIC
+        ${MOTIONCAM_DECODER_ROOT}/lib/Decoder.cpp
+        ${MOTIONCAM_DECODER_ROOT}/lib/RawData.cpp
+        ${MOTIONCAM_DECODER_ROOT}/lib/RawData_Legacy.cpp)
+target_include_directories(
+        motioncam_decoder
+        PUBLIC
+        ${MOTIONCAM_DECODER_ROOT}/lib/include
+        ${MOTIONCAM_DECODER_ROOT}/thirdparty)
+target_compile_features(motioncam_decoder PUBLIC cxx_std_17)
+set_target_properties(motioncam_decoder PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+add_library(
+        motioncam_preview
+        SHARED
+        mcraw_jni.cpp
+        mcraw_preview_renderer.cpp)
+target_include_directories(motioncam_preview PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_features(motioncam_preview PRIVATE cxx_std_17)
+target_link_libraries(
+        motioncam_preview
+        motioncam_decoder
+        ${log-lib}
+        ${jnigraphics-lib})
+
 target_link_libraries(
         transform_engine
         ${log-lib}

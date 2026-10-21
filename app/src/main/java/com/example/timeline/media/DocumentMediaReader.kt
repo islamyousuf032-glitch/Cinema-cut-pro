@@ -10,7 +10,7 @@ object DocumentMediaReader {
     fun createAnalyzingAsset(context: Context, uri: Uri, projectId: String): MediaAsset? {
         var name = "Unknown Media"
         var sizeBytes = 0L
-        val mimeType = context.contentResolver.getType(uri) ?: "application/octet-stream"
+        val providerMimeType = context.contentResolver.getType(uri) ?: "application/octet-stream"
 
         var lastModified = System.currentTimeMillis()
 
@@ -34,8 +34,11 @@ object DocumentMediaReader {
             if (com.example.BuildConfig.DEBUG) e.printStackTrace()
         }
 
+        val isMcraw = name.endsWith(".mcraw", ignoreCase = true) ||
+            MotionCamRawFormat.isCandidate(context, providerMimeType, uri)
+        val mimeType = if (isMcraw) MotionCamRawFormat.MIME_TYPE else providerMimeType
         val assetType = when {
-            mimeType.startsWith("video/") -> MediaAssetType.VIDEO
+            isMcraw || mimeType.startsWith("video/") -> MediaAssetType.VIDEO
             mimeType.startsWith("audio/") -> MediaAssetType.AUDIO
             mimeType.startsWith("image/") -> MediaAssetType.IMAGE
             else -> MediaAssetType.UNKNOWN

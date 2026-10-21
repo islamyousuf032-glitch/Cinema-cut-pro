@@ -33,7 +33,10 @@ fun FilmStripThumbnailRow(
     val density = LocalDensity.current
     
     val heightPx = with(density) { 56.dp.toPx() }
-    val widthPx = heightPx * (mediaAsset.metadata.width.toFloat() / mediaAsset.metadata.height.toFloat().coerceAtLeast(1f))
+    val isQuarterTurn = mediaAsset.metadata.rotationDegrees % 180 != 0
+    val displayWidth = (if (isQuarterTurn) mediaAsset.metadata.height else mediaAsset.metadata.width).coerceAtLeast(1)
+    val displayHeight = (if (isQuarterTurn) mediaAsset.metadata.width else mediaAsset.metadata.height).coerceAtLeast(1)
+    val widthPx = heightPx * (displayWidth.toFloat() / displayHeight.toFloat())
     
     val durationFrames = clip.timelineEnd - clip.timelineStart
     val thumbnailPlans = remember(clip.id, durationFrames, pixelsPerFrame, clip.sourceIn) {
@@ -103,7 +106,8 @@ fun ThumbnailCellView(
             uriString = uri,
             timeUs = timeUs,
             width = targetWidth,
-            height = targetHeight
+            height = targetHeight,
+            mimeType = mediaAsset.mimeType
         )
         bitmap = bmp
     }
