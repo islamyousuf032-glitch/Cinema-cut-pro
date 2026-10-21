@@ -36,5 +36,6 @@ object NativeColorGradeEngine {
     external fun nativeApplyContrast(pixels: IntArray, width: Int, height: Int, contrast: Float)
     external fun nativeApplySaturation(pixels: IntArray, width: Int, height: Int, saturation: Float)
     external fun nativeApplyTemperatureTint(pixels: IntArray, width: Int, height: Int, temperature: Float, tint: Float)
+    external fun nativeApplyOffset(pixels: IntArray, width: Int, height: Int, offsetR: Float, offsetG: Float, offsetB: Float)
     external fun nativeApplyLiftGammaGain(pixels: IntArray, width: Int, height: Int, liftR: Float, liftG: Float, liftB: Float, gammaR: Float, gammaG: Float, gammaB: Float, gainR: Float, gainG: Float, gainB: Float)
 }

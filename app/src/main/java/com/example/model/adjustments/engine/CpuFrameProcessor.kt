@@ -35,20 +35,39 @@ class CpuFrameProcessor {
                 com.example.model.colorgrade.engine.NativeColorGradeEngine.nativeApplyTemperatureTint(rawPixels, bitmap.width, bitmap.height, params.temperature, params.tint)
             }
             
-            // Lift/Gamma/Gain
-            val liftR = params.shadowColorBalance.x; val liftG = params.shadowColorBalance.y; val liftB = params.shadowColorBalance.z
-            val gammaR = params.midtoneColorBalance.x; val gammaG = params.midtoneColorBalance.y; val gammaB = params.midtoneColorBalance.z
-            val gainR = params.highlightColorBalance.x; val gainG = params.highlightColorBalance.y; val gainB = params.highlightColorBalance.z
-            
+            // Offset wheel is added before lift/gamma/gain, matching the GPU preview order.
+            if (params.offsetWheel.x != 0f || params.offsetWheel.y != 0f || params.offsetWheel.z != 0f) {
+                com.example.model.colorgrade.engine.NativeColorGradeEngine.nativeApplyOffset(
+                    rawPixels, bitmap.width, bitmap.height,
+                    params.offsetWheel.x, params.offsetWheel.y, params.offsetWheel.z
+                )
+            }
+
+            // Apply the actual primary wheels and fold the three-zone balance controls into the
+            // same native pass. The viewport retains its Compose matrix for brightness/contrast/sat.
+            val liftR = params.lift.x + params.shadowColorBalance.x * 0.5f
+            val liftG = params.lift.y + params.shadowColorBalance.y * 0.5f
+            val liftB = params.lift.z + params.shadowColorBalance.z * 0.5f
+            val gammaR = params.gamma.x * (1f - params.midtoneColorBalance.x * 0.5f)
+            val gammaG = params.gamma.y * (1f - params.midtoneColorBalance.y * 0.5f)
+            val gammaB = params.gamma.z * (1f - params.midtoneColorBalance.z * 0.5f)
+            val gainR = params.gain.x * (1f + params.highlightColorBalance.x * 0.5f)
+            val gainG = params.gain.y * (1f + params.highlightColorBalance.y * 0.5f)
+            val gainB = params.gain.z * (1f + params.highlightColorBalance.z * 0.5f)
+
             val hasLift = liftR != 0f || liftG != 0f || liftB != 0f
-            val hasGamma = gammaR != 0f || gammaG != 0f || gammaB != 0f
-            val hasGain = gainR != 0f || gainG != 0f || gainB != 0f
-            
+            val hasGamma = gammaR != 1f || gammaG != 1f || gammaB != 1f
+            val hasGain = gainR != 1f || gainG != 1f || gainB != 1f
+
             if (hasLift || hasGamma || hasGain) {
-                val lr = liftR * 0.5f; val lg = liftG * 0.5f; val lb = liftB * 0.5f
-                val gmr = 1f - gammaR * 0.5f; val gmg = 1f - gammaG * 0.5f; val gmb = 1f - gammaB * 0.5f
-                val gr = 1f + gainR * 0.5f; val gg = 1f + gainG * 0.5f; val gb = 1f + gainB * 0.5f
-                com.example.model.colorgrade.engine.NativeColorGradeEngine.nativeApplyLiftGammaGain(rawPixels, bitmap.width, bitmap.height, lr, lg, lb, gmr, gmg, gmb, gr, gg, gb)
+                com.example.model.colorgrade.engine.NativeColorGradeEngine.nativeApplyLiftGammaGain(
+                    rawPixels,
+                    bitmap.width,
+                    bitmap.height,
+                    liftR.coerceIn(-1f, 1f), liftG.coerceIn(-1f, 1f), liftB.coerceIn(-1f, 1f),
+                    gammaR.coerceAtLeast(0.001f), gammaG.coerceAtLeast(0.001f), gammaB.coerceAtLeast(0.001f),
+                    gainR.coerceAtLeast(0f), gainG.coerceAtLeast(0f), gainB.coerceAtLeast(0f)
+                )
             }
             
             return Bitmap.createBitmap(rawPixels, bitmap.width, bitmap.height, Bitmap.Config.ARGB_8888)

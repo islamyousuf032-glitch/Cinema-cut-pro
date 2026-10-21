@@ -71,7 +71,7 @@ class McrawMediaAnalyzer(private val context: Context) {
             val hasGyro = NativeMcrawDecoder.hasGyroData(handle)
             val hasAccelerometer = NativeMcrawDecoder.hasAccelerometerData(handle)
             val reportWarnings = buildList {
-                add("The native preview uses a lightweight Bayer demosaic. Playback renders at reduced resolution and may skip frames on slower devices rather than slowing the timeline; validate speed and camera color on-device.")
+                add("The native preview uses a lightweight Bayer demosaic. Playback renders at 480 px on the longest edge and may skip frames on slower devices rather than slowing the timeline. Basic exposure, temperature/tint, Lift/Gamma/Gain/Offset wheels, and three-zone color balance are previewed; curves, HSL, LUTs, and other advanced grades are not yet reflected.")
                 if (hasAudio) {
                     add("Embedded PCM audio is detected and classified, but audio playback and export routing are not connected to the native preview yet.")
                 }

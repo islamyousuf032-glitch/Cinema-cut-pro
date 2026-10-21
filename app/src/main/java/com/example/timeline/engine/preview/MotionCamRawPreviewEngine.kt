@@ -6,6 +6,7 @@ import android.graphics.Matrix
 import android.net.Uri
 import android.view.Surface
 import com.example.model.adjustments.VideoAdjustmentParams
+import com.example.model.adjustments.engine.CpuFrameProcessor
 import com.example.timeline.media.NativeMcrawDecoder
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -63,6 +64,7 @@ class MotionCamRawPreviewEngine(private val context: Context) : PreviewEngine {
     private var currentPositionUsValue = 0L
     private var requestedUri: String? = null
     private var playbackSpeed = 1f
+    @Volatile private var previewAdjustmentParams = VideoAdjustmentParams.default()
     private var loadJob: Job? = null
     private var playbackJob: Job? = null
     private var playWhenReady = false
@@ -91,6 +93,11 @@ class MotionCamRawPreviewEngine(private val context: Context) : PreviewEngine {
         if (released) return
         val uriChanged = uriString != requestedUri
         requestedUri = uriString
+        if (evaluatedParams != null) {
+            previewAdjustmentParams = evaluatedParams
+        } else if (uriChanged) {
+            previewAdjustmentParams = VideoAdjustmentParams.default()
+        }
         val resumePlayback = playbackJob?.isActive == true || playWhenReady
         if (resumePlayback) playWhenReady = true
         playbackJob?.cancel()
@@ -113,7 +120,7 @@ class MotionCamRawPreviewEngine(private val context: Context) : PreviewEngine {
                         val targetNs = targetPositionMs.coerceAtMost(Long.MAX_VALUE / 1_000_000L) * 1_000_000L
                         val index = nearestFrameIndex(frameTimestampsNs, targetNs)
                         val maximumEdge = if (resumePlayback) PLAYBACK_MAX_EDGE else STILL_MAX_EDGE
-                        val bitmap = decodeFrame(index, maximumEdge)
+                        val bitmap = decodeFrame(index, maximumEdge, previewAdjustmentParams)
                         val timestampUs = frameTimestampsNs[index] / 1_000L
                         currentFrameIndex = index
                         currentPositionUsValue = timestampUs
@@ -165,16 +172,38 @@ class MotionCamRawPreviewEngine(private val context: Context) : PreviewEngine {
         }
     }
 
-    private fun decodeFrame(index: Int, maximumEdge: Int = STILL_MAX_EDGE): Bitmap {
+    private fun decodeFrame(
+        index: Int,
+        maximumEdge: Int = STILL_MAX_EDGE,
+        params: VideoAdjustmentParams = previewAdjustmentParams
+    ): Bitmap {
         val decoded = NativeMcrawDecoder.decodeFrame(handle, index, maximumEdge)
         val rotation = runCatching {
             JSONObject(NativeMcrawDecoder.frameMetadataJson(handle, index))
                 .optInt("rotationDegrees", 0)
                 .let { ((it % 360) + 360) % 360 }
         }.getOrDefault(0)
-        if (rotation == 0) return decoded
-        val matrix = Matrix().apply { postRotate(rotation.toFloat()) }
-        return Bitmap.createBitmap(decoded, 0, 0, decoded.width, decoded.height, matrix, true)
+        val oriented = if (rotation == 0) {
+            decoded
+        } else {
+            val matrix = Matrix().apply { postRotate(rotation.toFloat()) }
+            Bitmap.createBitmap(decoded, 0, 0, decoded.width, decoded.height, matrix, true)
+                .also { if (it !== decoded) decoded.recycle() }
+        }
+        if (!MotionCamPreviewGradeSupport.hasNativePreviewAdjustments(params)) return oriented
+
+        val processed = runCatching {
+            CpuFrameProcessor.process(
+                oriented,
+                MotionCamPreviewGradeSupport.paramsForNativeBitmapProcessing(params)
+            )
+        }.onFailure { error ->
+            if (com.example.BuildConfig.DEBUG) {
+                android.util.Log.w("MotionCamRawPreview", "Native RAW color adjustment failed", error)
+            }
+        }.getOrDefault(oriented)
+        if (processed !== oriented) oriented.recycle()
+        return processed
     }
 
     /** Uses source timestamps as a wall-clock target and skips missed frames instead of slowing the clip. */
@@ -222,7 +251,7 @@ class MotionCamRawPreviewEngine(private val context: Context) : PreviewEngine {
                     val frameAndTime = withContext(Dispatchers.IO) {
                         decoderMutex.withLock {
                             if (handle == 0L) throw IllegalStateException("MotionCam decoder is closed")
-                            val bitmap = decodeFrame(targetIndex, PLAYBACK_MAX_EDGE)
+                            val bitmap = decodeFrame(targetIndex, PLAYBACK_MAX_EDGE, previewAdjustmentParams)
                             currentFrameIndex = targetIndex
                             currentPositionUsValue = frameTimestampsNs[targetIndex] / 1_000L
                             bitmap to currentPositionUsValue
@@ -358,6 +387,6 @@ class MotionCamRawPreviewEngine(private val context: Context) : PreviewEngine {
 
     companion object {
         private const val STILL_MAX_EDGE = 960
-        private const val PLAYBACK_MAX_EDGE = 640
+        private const val PLAYBACK_MAX_EDGE = 480
     }
 }

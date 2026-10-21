@@ -1,5 +1,8 @@
 #include <jni.h>
 #include <android/log.h>
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
 #include <vector>
 #include "transform_engine.h"
 
@@ -477,6 +480,34 @@ Java_com_example_model_colorgrade_engine_NativeColorGradeEngine_nativeApplyTempe
         r = std::min(255, std::max(0, (int)(r * rMult)));
         g = std::min(255, std::max(0, (int)(g * gMult)));
         b = std::min(255, std::max(0, (int)(b * bMult)));
+        buf[i] = (a << 24) | (r << 16) | (g << 8) | b;
+    }
+    env->ReleaseIntArrayElements(pixels, buf, 0);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_example_model_colorgrade_engine_NativeColorGradeEngine_nativeApplyOffset(
+    JNIEnv* env, jobject,
+    jintArray pixels, jint width, jint height,
+    jfloat offsetR, jfloat offsetG, jfloat offsetB) {
+    if (pixels == nullptr || width <= 0 || height <= 0) return;
+    jint* buf = env->GetIntArrayElements(pixels, nullptr);
+    if (buf == nullptr) return;
+    const jsize available = env->GetArrayLength(pixels);
+    const std::int64_t requested = static_cast<std::int64_t>(width) * static_cast<std::int64_t>(height);
+    const jsize numPixels = static_cast<jsize>(std::min<std::int64_t>(requested, available));
+    const float safeOffsetR = std::isfinite(offsetR) ? offsetR : 0.0f;
+    const float safeOffsetG = std::isfinite(offsetG) ? offsetG : 0.0f;
+    const float safeOffsetB = std::isfinite(offsetB) ? offsetB : 0.0f;
+    const auto applyOffset = [](const int channel, const float offset) {
+        return std::min(255, std::max(0, static_cast<int>(channel + offset * 255.0f)));
+    };
+    for (jsize i = 0; i < numPixels; ++i) {
+        const int color = buf[i];
+        const int a = (color >> 24) & 0xFF;
+        const int r = applyOffset((color >> 16) & 0xFF, safeOffsetR);
+        const int g = applyOffset((color >> 8) & 0xFF, safeOffsetG);
+        const int b = applyOffset(color & 0xFF, safeOffsetB);
         buf[i] = (a << 24) | (r << 16) | (g << 8) | b;
     }
     env->ReleaseIntArrayElements(pixels, buf, 0);

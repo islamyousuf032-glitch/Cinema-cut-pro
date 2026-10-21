@@ -102,11 +102,15 @@ fun ProfessionalColorGradingScreen(
         activeClip.colorGrade
     }
     val activeColorLayerId = if (showNodes) activeLayer?.id else null
-    
+    val activeAsset = uiState.project.mediaAssets.firstOrNull { it.assetId == activeClip.mediaId }
+    val isMotionCamRaw = activeAsset?.let {
+        com.example.timeline.media.MotionCamRawFormat.isMcrawAsset(it)
+    } == true
+
     val engineType by previewController.engineTypeFlow.collectAsState()
     val engineToRestore = remember(previewController) { previewController.engineTypeFlow.value }
-    val needsMedia3ForLiveGrade = remember(previewController) {
-        !previewController.previewEngine.capabilities.canApplyRealtimeColorGrade
+    val needsMedia3ForLiveGrade = remember(previewController, engineType, isMotionCamRaw) {
+        !isMotionCamRaw && !previewController.previewEngine.capabilities.canApplyRealtimeColorGrade
     }
     val latestIsPlaying by rememberUpdatedState(isPlaying)
     DisposableEffect(previewController, engineToRestore, needsMedia3ForLiveGrade) {
@@ -179,6 +183,15 @@ fun ProfessionalColorGradingScreen(
                 onPaste = { colorViewModel.pasteAdjustmentsToSelectedClip() },
                 onReset = { colorViewModel.resetAllAdjustments() }
             )
+
+            if (isMotionCamRaw) {
+                Text(
+                    text = "MotionCam RAW preview applies exposure, temperature/tint, primary Lift/Gamma/Gain/Offset, and three-zone color balance. Brightness/contrast/saturation also apply; curves, HSL, LUTs, and other advanced effects are not yet reflected."
+                    color = MaterialTheme.colorScheme.tertiary,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                )
+            }
 
             ColorPageTabs(
                 selectedTab = selectedTab,
