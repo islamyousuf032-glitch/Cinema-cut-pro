@@ -186,7 +186,7 @@ fun ProfessionalColorGradingScreen(
 
             if (isMotionCamRaw) {
                 Text(
-                    text = "MotionCam RAW preview applies exposure, temperature/tint, primary Lift/Gamma/Gain/Offset, and three-zone color balance. Brightness/contrast/saturation also apply; curves, HSL, LUTs, and other advanced effects are not yet reflected."
+                    text = "MotionCam RAW preview applies exposure, temperature/tint, primary Lift/Gamma/Gain/Offset, and three-zone color balance. Brightness/contrast/saturation also apply; curves, HSL, LUTs, and other advanced effects are not yet reflected.",
                     color = MaterialTheme.colorScheme.tertiary,
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
