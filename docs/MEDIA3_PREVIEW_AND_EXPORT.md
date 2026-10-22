@@ -1,6 +1,6 @@
 # Playback, live grading, and bounded export
 
-**Verification status:** the latest CI-verified Android debug build is commit `71487b0` (workflow [39621221519](https://github.com/islamyousuf032-glitch/Cinema-cut-pro/actions/runs/39621221519)). The current working-tree changes have not yet had an Android/Kotlin build or device test. The native host suite was rerun for this working tree and passed. None of this is a device-compatibility guarantee.
+**Verification status:** the export, preview, and native-renderer code changes in commit `449e992` passed the Android debug build, JVM tests, and native host tests in workflow [39746028316](https://github.com/islamyousuf032-glitch/Cinema-cut-pro/actions/runs/39746028316). None of these changes has been validated on a target device, and the CI result is not a device-compatibility guarantee.
 
 ## Playback routes
 
