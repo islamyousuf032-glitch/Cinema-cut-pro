@@ -51,7 +51,7 @@ object LutBakeEngine {
                         val r = rIdx * step
                         
                         val outColor = engine.processColor(floatArrayOf(r, g, b))
-                        writer.println("\${outColor[0]} \${outColor[1]} \${outColor[2]}")
+                        writer.println("${outColor[0]} ${outColor[1]} ${outColor[2]}")
                     }
                 }
             }
