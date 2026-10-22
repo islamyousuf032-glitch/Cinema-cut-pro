@@ -154,7 +154,9 @@ jobs:
           from pathlib import Path
 
           log = Path("ffmpeg-build.log")
-          excerpt = "\n".join(log.read_text(errors="replace").splitlines()[-100:]) if log.exists() else "No FFmpeg build log was produced."
+          excerpt = "\n".join(log.read_text(errors="replace").splitlines()[-35:]) if log.exists() else "No FFmpeg build log was produced."
+          if len(excerpt) > 3000:
+              excerpt = "... earlier output omitted ...\n" + excerpt[-3000:]
           message = excerpt.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
           print(f"::error title=FFmpeg source build failed::{message}")
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:

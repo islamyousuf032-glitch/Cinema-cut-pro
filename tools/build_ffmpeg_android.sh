@@ -133,9 +133,16 @@ cd "${BUILD_DIR}"
   --enable-decoder=h264_mediacodec \
   --enable-decoder=hevc_mediacodec
 
-for component in JNI MEDIACODEC H264_MEDIACODEC_DECODER HEVC_MEDIACODEC_DECODER; do
+for component in JNI MEDIACODEC; do
   if ! grep -Eq "^#define CONFIG_${component} 1$" config.h; then
     echo "Expected FFmpeg Android component was not enabled: ${component}." >&2
+    exit 2
+  fi
+done
+
+for component in H264_MEDIACODEC_DECODER HEVC_MEDIACODEC_DECODER; do
+  if ! grep -Eq "^#define CONFIG_${component} 1$" config_components.h; then
+    echo "Expected FFmpeg Android decoder was not enabled: ${component}." >&2
     exit 2
   fi
 done
