@@ -17,7 +17,7 @@ permissions:
 
 jobs:
   build-test-release:
-    name: Build, test, and publish installable APK
+    name: Build and test Android app
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -126,6 +126,7 @@ jobs:
         run: python3 tools/run_native_export_tests.py
 
       - name: Prepare APK and checksum
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_test_release == true
         id: apk
         shell: bash
         run: |
@@ -138,6 +139,7 @@ jobs:
           echo "tag=android-test-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
 
       - name: Save APK as a workflow artifact
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_test_release == true
         uses: actions/upload-artifact@v7.0.2
         with:
           name: cinema-cut-pro-test-apk-${{ github.run_number }}-${{ github.run_attempt }}
@@ -148,10 +150,7 @@ jobs:
           retention-days: 30
 
       - name: Publish test APK in GitHub Releases
-        if: >-
-          github.ref == 'refs/heads/arena/a2d6ebb0-cinema-cut-pro' &&
-          ((github.event_name == 'workflow_dispatch' && inputs.publish_test_release == true) ||
-           (github.event_name == 'push' && contains(github.event.head_commit.message, '[publish-test-release]')))
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_test_release == true
         env:
           GH_TOKEN: ${{ github.token }}
           APK_NAME: ${{ steps.apk.outputs.name }}
