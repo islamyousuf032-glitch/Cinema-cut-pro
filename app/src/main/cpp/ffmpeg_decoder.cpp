@@ -70,7 +70,7 @@ struct FfmpegPreview {
     bool seekRequested = false;
     int64_t seekTargetUs = 0;
     std::string lastError;
-    std::mutex mutex;
+    mutable std::mutex mutex;
     std::condition_variable condition;
     std::thread worker;
 };
@@ -323,7 +323,7 @@ FrameRenderOutcome waitForFrameTime(FfmpegPreview& preview, const int64_t frameU
         // MediaCodec only accepts target timestamps close to the monotonic clock. A late frame
         // is rendered immediately rather than delaying the rest of the stream.
         targetWallNs = std::clamp<int64_t>(targetWallNs, nowNs - 500'000'000LL, nowNs + 500'000'000LL);
-        const auto* buffer = reinterpret_cast<AVMediaCodecBuffer*>(preview.frame->data[3]);
+        auto* buffer = reinterpret_cast<AVMediaCodecBuffer*>(preview.frame->data[3]);
         if (buffer == nullptr || av_mediacodec_render_buffer_at_time(buffer, targetWallNs) < 0) {
             return FrameRenderOutcome::Failed;
         }
