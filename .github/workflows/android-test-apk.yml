@@ -134,12 +134,32 @@ jobs:
         run: bash -n tools/build_ffmpeg_android.sh
 
       - name: Build pinned FFmpeg Android sources (verification only)
+        id: ffmpeg_build
         if: |
           (github.event_name == 'workflow_dispatch' && inputs.verify_ffmpeg_source_build == true) ||
           (github.event_name == 'push' && startsWith(github.event.head_commit.message, 'build(ffmpeg):'))
         env:
           FFMPEG_BUILD_JOBS: 2
-        run: tools/build_ffmpeg_android.sh
+        shell: bash
+        run: |
+          set -o pipefail
+          tools/build_ffmpeg_android.sh 2>&1 | tee ffmpeg-build.log
+
+      - name: Report FFmpeg build failure details
+        if: always() && steps.ffmpeg_build.outcome == 'failure'
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          log = Path("ffmpeg-build.log")
+          excerpt = "\n".join(log.read_text(errors="replace").splitlines()[-100:]) if log.exists() else "No FFmpeg build log was produced."
+          message = excerpt.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+          print(f"::error title=FFmpeg source build failed::{message}")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write("## FFmpeg Android source-build failure\n\n```text\n" + excerpt + "\n```\n")
+          PY
 
       - name: Prepare APK and checksum
         if: github.event_name == 'workflow_dispatch' && inputs.publish_test_release == true
