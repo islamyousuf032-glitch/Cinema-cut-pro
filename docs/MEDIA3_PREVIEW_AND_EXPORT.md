@@ -1,6 +1,6 @@
 # Playback, live grading, and bounded export
 
-**Current verification:** GitHub Actions run `39800198201` passed Android Kotlin/native CMake compilation, JVM tests, the C++ host suite (including the Bayer preview renderer and upstream MotionCam decoder tests), and FFmpeg build-script syntax on commit `dbb3357`. Its normal push path skipped APK assembly. A separately gated test-release run will build and verify a debug APK only after the explicit `[publish-test-release]` milestone; no APK has been generated or shared yet. This sandbox has no Android SDK/NDK or Java runtime. No physical-device test has been performed; the user will do device testing.
+**Current verification:** GitHub Actions run `39800198201` passed Android Kotlin/native CMake compilation, JVM tests, the C++ host suite (including the Bayer preview renderer and upstream MotionCam decoder tests), and FFmpeg build-script syntax on commit `dbb3357`. The first gated test-release run (`39802315219`) passed those checks but failed during `:app:assembleDebug`; APK license verification, checksumming, and publishing were skipped. APK-assembly diagnostics are now captured in the workflow for a retry; no verified APK has been shared. This sandbox has no Android SDK/NDK or Java runtime. No physical-device test has been performed; the user will do device testing.
 
 ## Playback routes
 
