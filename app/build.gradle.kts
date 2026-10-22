@@ -12,16 +12,16 @@ val ffmpegGeneratedMarker = ".cinema-cut-pro-ffmpeg-generated"
 val ffmpegGeneratedOutputMarkers = listOf("build", "prefix")
   .map { directory -> ffmpegBuildRoot.resolve("$directory/$ffmpegGeneratedMarker") }
 val ffmpegLibraries = listOf("avutil", "avcodec", "avformat", "swscale", "swresample")
-val ffmpegBuildOutputs = ffmpegLibraries.flatMap { library ->
+val ffmpegBuildOutputFiles = ffmpegLibraries.flatMap { library ->
   listOf(
     ffmpegBuildRoot.resolve("prefix/lib/lib${library}.so"),
     ffmpegBuildRoot.resolve("jniLibs/arm64-v8a/lib${library}.so")
   )
 } + listOf(
-  ffmpegBuildRoot.resolve("prefix/include"),
   ffmpegBuildRoot.resolve("assets/ffmpeg/COPYING.LGPLv2.1"),
   ffmpegBuildRoot.resolve("assets/ffmpeg/FFMPEG_BUILD_INFO.txt")
 ) + ffmpegGeneratedOutputMarkers
+val ffmpegBuildHeaderDirectory = ffmpegBuildRoot.resolve("prefix/include")
 val buildFfmpegAndroid by tasks.registering(Exec::class) {
   group = "build"
   description = "Builds the pinned LGPL-only FFmpeg libraries for Android MediaCodec playback."
@@ -30,7 +30,8 @@ val buildFfmpegAndroid by tasks.registering(Exec::class) {
   environment("FFMPEG_BUILD_JOBS", providers.gradleProperty("ffmpegBuildJobs").orElse("2").get())
   inputs.file(rootProject.file("tools/build_ffmpeg_android.sh"))
   inputs.property("ffmpegSourceRevision", "1041abdc962f4cc4f394aa8de9dc5236c0c3b9e7")
-  outputs.files(ffmpegBuildOutputs)
+  outputs.files(ffmpegBuildOutputFiles)
+  outputs.dir(ffmpegBuildHeaderDirectory)
 }
 
 val releaseKeystoreFile = System.getenv("KEYSTORE_PATH")
