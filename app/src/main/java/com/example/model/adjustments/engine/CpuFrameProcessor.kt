@@ -1,6 +1,7 @@
 package com.example.model.adjustments.engine
 
 import com.example.model.adjustments.VideoAdjustmentParams
+import com.example.model.adjustments.WhiteBalanceTemperature
 import kotlin.math.*
 import kotlin.random.Random
 
@@ -31,8 +32,11 @@ class CpuFrameProcessor {
             }
             
             // Temperature/Tint
-            if (params.temperature != 0f || params.tint != 0f) {
-                com.example.model.colorgrade.engine.NativeColorGradeEngine.nativeApplyTemperatureTint(rawPixels, bitmap.width, bitmap.height, params.temperature, params.tint)
+            val temperature = WhiteBalanceTemperature.resolve(params)
+            if (temperature != 0f || params.tint != 0f) {
+                com.example.model.colorgrade.engine.NativeColorGradeEngine.nativeApplyTemperatureTint(
+                    rawPixels, bitmap.width, bitmap.height, temperature, params.tint
+                )
             }
             
             // Offset wheel is added before lift/gamma/gain, matching the GPU preview order.
@@ -84,6 +88,7 @@ class CpuFrameProcessor {
         val height = inputFrame.height
         val inPixels = inputFrame.pixels
         val outPixels = FloatArray(inPixels.size)
+        val temperature = WhiteBalanceTemperature.resolve(params)
         
         val random = Random(frameTime)
         val pivot = 0.5f 
@@ -129,8 +134,8 @@ class CpuFrameProcessor {
                     }
                 }
                 
-                val tempR = if (params.temperature > 0) 1f + params.temperature * 0.2f else 1f
-                val tempB = if (params.temperature < 0) 1f - params.temperature * 0.2f else 1f
+                val tempR = if (temperature > 0) 1f + temperature * 0.2f else 1f
+                val tempB = if (temperature < 0) 1f - temperature * 0.2f else 1f
                 val tintG = if (params.tint > 0) 1f + params.tint * 0.2f else 1f
                 val tintR = if (params.tint < 0) 1f - params.tint * 0.2f else 1f
                 

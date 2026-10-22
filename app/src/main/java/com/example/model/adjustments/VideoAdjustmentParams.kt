@@ -119,8 +119,8 @@ data class VideoAdjustmentParams(
         if (
             exposureStops != 0f || brightness != 0f || contrast != 0f || highlights != 0f ||
             shadows != 0f || whites != 0f || blacks != 0f || fade != 0f ||
-            saturation != 1f || vibrance != 0f || temperature != 0f ||
-            temperatureKelvin != null || tint != 0f || sharpness != 0f || clarity != 0f ||
+            saturation != 1f || vibrance != 0f || WhiteBalanceTemperature.resolve(this) != 0f ||
+            tint != 0f || sharpness != 0f || clarity != 0f ||
             structure != 0f || dehaze != 0f || grainAmount != 0f || vignetteAmount != 0f ||
             lift.x != 0f || lift.y != 0f || lift.z != 0f ||
             gamma.x != 1f || gamma.y != 1f || gamma.z != 1f ||

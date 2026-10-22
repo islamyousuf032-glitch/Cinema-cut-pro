@@ -2,6 +2,7 @@ package com.example.model.adjustments.engine
 
 import androidx.media3.common.util.GlProgram
 import com.example.model.adjustments.VideoAdjustmentParams
+import com.example.model.adjustments.WhiteBalanceTemperature
 import kotlin.math.pow
 
 object AdjustmentUniformBinder {
@@ -119,7 +120,7 @@ object AdjustmentUniformBinder {
         // Color
         glProgram.safeFloat("uSaturation", params.saturation)
         glProgram.safeFloat("uVibrance", params.vibrance)
-        glProgram.safeFloat("uTemperature", params.temperature)
+        glProgram.safeFloat("uTemperature", WhiteBalanceTemperature.resolve(params))
         glProgram.safeFloat("uTint", params.tint)
         
         // Effects

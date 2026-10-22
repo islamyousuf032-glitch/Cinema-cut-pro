@@ -1,6 +1,7 @@
 package com.example.timeline.engine.preview
 
 import com.example.model.adjustments.VideoAdjustmentParams
+import com.example.model.adjustments.WhiteBalanceTemperature
 
 /**
  * Maps the RAW preview's supported grading parameters to a compact JNI payload. Bayer rendering
@@ -10,7 +11,7 @@ import com.example.model.adjustments.VideoAdjustmentParams
 internal object MotionCamPreviewGradeSupport {
     fun hasNativePreviewAdjustments(params: VideoAdjustmentParams): Boolean =
         params.exposureStops != 0f ||
-            params.temperature != 0f ||
+            WhiteBalanceTemperature.resolve(params) != 0f ||
             params.tint != 0f ||
             params.lift.hasOffset() ||
             params.gamma != com.example.model.adjustments.Vector3.ONE ||
@@ -19,6 +20,19 @@ internal object MotionCamPreviewGradeSupport {
             params.shadowColorBalance.hasOffset() ||
             params.midtoneColorBalance.hasOffset() ||
             params.highlightColorBalance.hasOffset()
+
+    fun hasNativeGradeChanged(
+        previous: VideoAdjustmentParams,
+        next: VideoAdjustmentParams
+    ): Boolean {
+        val previousPayload = nativeGradeParams(previous)
+        val nextPayload = nativeGradeParams(next)
+        return when {
+            previousPayload == null -> nextPayload != null
+            nextPayload == null -> true
+            else -> !previousPayload.contentEquals(nextPayload)
+        }
+    }
 
     /** Order: exposure, temperature/tint, Lift RGB, Gamma RGB, Gain RGB, then Offset RGB. */
     fun nativeGradeParams(params: VideoAdjustmentParams): FloatArray? {
@@ -31,7 +45,7 @@ internal object MotionCamPreviewGradeSupport {
         val highlights = params.highlightColorBalance
         return floatArrayOf(
             params.exposureStops,
-            params.temperature,
+            WhiteBalanceTemperature.resolve(params),
             params.tint,
             lift.x + shadows.x * 0.5f,
             lift.y + shadows.y * 0.5f,

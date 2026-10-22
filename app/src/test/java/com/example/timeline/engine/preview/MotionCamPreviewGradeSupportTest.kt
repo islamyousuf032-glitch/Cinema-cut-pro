@@ -23,6 +23,7 @@ class MotionCamPreviewGradeSupportTest {
         val supportedChanges = listOf(
             defaults.copy(exposureStops = 0.5f),
             defaults.copy(temperature = 0.2f),
+            defaults.copy(temperatureKelvin = 3_000f),
             defaults.copy(tint = -0.1f),
             defaults.copy(lift = Vector3(0.1f, 0f, 0f)),
             defaults.copy(gamma = Vector3(0.9f, 1f, 1f)),
@@ -84,6 +85,36 @@ class MotionCamPreviewGradeSupportTest {
 
         assertFalse(MotionCamPreviewGradeSupport.hasNativePreviewAdjustments(params))
         assertNull(MotionCamPreviewGradeSupport.nativeGradeParams(params))
+    }
+
+    @Test
+    fun onlyNativeGradeChangesRequireAnotherRawFrameRender() {
+        val defaults = VideoAdjustmentParams.default()
+
+        assertFalse(
+            MotionCamPreviewGradeSupport.hasNativeGradeChanged(
+                defaults,
+                defaults.copy(brightness = 0.2f, contrast = 0.1f, saturation = 1.2f)
+            )
+        )
+        assertFalse(
+            MotionCamPreviewGradeSupport.hasNativeGradeChanged(
+                defaults,
+                defaults.copy(hslHue = floatArrayOf(0.1f), lutId = "example-lut", qualEnabled = true)
+            )
+        )
+        assertTrue(
+            MotionCamPreviewGradeSupport.hasNativeGradeChanged(
+                defaults,
+                defaults.copy(exposureStops = 0.25f)
+            )
+        )
+        assertTrue(
+            MotionCamPreviewGradeSupport.hasNativeGradeChanged(
+                defaults,
+                defaults.copy(temperatureKelvin = 3_000f)
+            )
+        )
     }
 
     @Test

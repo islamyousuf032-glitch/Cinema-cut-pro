@@ -10,12 +10,18 @@ class VideoAdjustmentParamsPreviewTest {
     @Test
     fun defaultParamsUseTheShaderFastPath() {
         assertFalse(VideoAdjustmentParams.default().hasActivePreviewEffect())
+        assertFalse(
+            VideoAdjustmentParams.default()
+                .copy(temperatureKelvin = WhiteBalanceTemperature.NEUTRAL_KELVIN)
+                .hasActivePreviewEffect()
+        )
     }
 
     @Test
     fun visibleColorChangesEnableTheGradeShader() {
         assertTrue(VideoAdjustmentParams.default().copy(brightness = 0.1f).hasActivePreviewEffect())
         assertTrue(VideoAdjustmentParams.default().copy(saturation = 1.2f).hasActivePreviewEffect())
+        assertTrue(VideoAdjustmentParams.default().copy(temperatureKelvin = 3_000f).hasActivePreviewEffect())
         assertTrue(VideoAdjustmentParams.default().copy(hslHue = floatArrayOf(0.1f)).hasActivePreviewEffect())
         assertTrue(VideoAdjustmentParams.default().copy(qualShowMatte = true).hasActivePreviewEffect())
         assertTrue(VideoAdjustmentParams.default().copy(lutId = "test-lut").hasActivePreviewEffect())
