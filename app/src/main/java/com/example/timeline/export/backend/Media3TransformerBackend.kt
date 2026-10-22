@@ -1,6 +1,7 @@
 package com.example.timeline.export.backend
 
 import android.content.Context
+import android.media.MediaCodecInfo
 import android.media.MediaCodecList
 import android.media.MediaFormat
 import android.net.Uri
@@ -53,6 +54,7 @@ import com.example.timeline.export.model.ExportSettings
 import com.example.timeline.export.model.ExportValidationResult
 import com.example.timeline.media.FrameRate
 import com.example.timeline.media.MediaAsset
+import com.example.timeline.media.MotionCamRawFormat
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -112,10 +114,11 @@ class Media3TransformerBackend(context: Context) : ExportBackend {
         val width: Int,
         val height: Int,
         val frameRate: Float,
-        val bitrate: Int
+        val bitrate: Int,
+        val bitrateMode: Int
     )
 
-    private data class AudioEncoderQuery(val sampleRate: Int, val channelCount: Int)
+    private data class AudioEncoderQuery(val sampleRate: Int, val channelCount: Int, val bitrate: Int)
 
     override fun getCapabilities(): ExportBackendCapability = ExportBackendCapability(
         backendAvailable = true,
@@ -382,7 +385,7 @@ class Media3TransformerBackend(context: Context) : ExportBackend {
             errors += "The requested output resolution exceeds the supported adapter limit."
         }
         if (settings.frameRate.numerator <= 0 || settings.frameRate.denominator <= 0 ||
-            settings.frameRate.floatValue > capabilities.maxFps
+            !settings.frameRate.floatValue.isFinite() || settings.frameRate.floatValue > capabilities.maxFps
         ) {
             errors += "The requested output frame rate is invalid or exceeds the adapter limit."
         }
@@ -482,6 +485,9 @@ class Media3TransformerBackend(context: Context) : ExportBackend {
                 errors += "Every active timeline clip must reference imported video media."
             }
             if (asset.metadata.durationUs <= 0L) errors += "An imported video has no usable duration metadata."
+            if (MotionCamRawFormat.isMcrawAsset(asset)) {
+                errors += "MotionCam RAW (.mcraw) video export is not implemented by the H.264/MP4 backend. Export a rendered standard video file instead."
+            }
             if (asset.metadata.isVariableFrameRate) {
                 errors += "Variable-frame-rate media cannot be conformed to project FPS by this Media3 path yet; export is blocked and the original remains unchanged."
             } else if (!asset.metadata.variableFrameRateDetectionComplete) {
@@ -552,7 +558,7 @@ class Media3TransformerBackend(context: Context) : ExportBackend {
         }
         val includeAudio = activeVideoTrack?.isMuted == false && activeClips.isNotEmpty() &&
             activeClips.all { it.asset.metadata.hasAudio }
-        if (includeAudio && !hasAudioEncoder(settings.audioSampleRate, settings.audioChannels)) {
+        if (includeAudio && !hasAudioEncoder(settings.audioSampleRate, settings.audioChannels, settings.audioBitrate)) {
             errors += "No Android AAC encoder supports the requested source audio format."
         }
         if (activeClips.isNotEmpty() && !hasVideoEncoder(settings)) {
@@ -623,11 +629,18 @@ class Media3TransformerBackend(context: Context) : ExportBackend {
     }
 
     private fun hasVideoEncoder(settings: ExportSettings): Boolean {
+        val bitrateMode = when (settings.bitrateMode) {
+            ExportSettings.BitrateMode.CBR -> MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR
+            ExportSettings.BitrateMode.AUTO,
+            ExportSettings.BitrateMode.VBR,
+            ExportSettings.BitrateMode.CRF -> MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR
+        }
         val query = VideoEncoderQuery(
             settings.resolutionWidth,
             settings.resolutionHeight,
             settings.frameRate.floatValue,
-            settings.videoBitrate
+            settings.videoBitrate,
+            bitrateMode
         )
         return videoEncoderSupportCache.computeIfAbsent(query) {
             runCatching {
@@ -640,23 +653,26 @@ class Media3TransformerBackend(context: Context) : ExportBackend {
                                 query.width,
                                 query.height,
                                 query.frameRate.toDouble()
-                            ) && video.bitrateRange.contains(query.bitrate)
+                            ) && video.bitrateRange.contains(query.bitrate) &&
+                                capabilities.encoderCapabilities.isBitrateModeSupported(query.bitrateMode)
                         }.getOrDefault(false)
                 }
             }.getOrDefault(false)
         }
     }
 
-    private fun hasAudioEncoder(sampleRate: Int, channelCount: Int): Boolean {
-        val query = AudioEncoderQuery(sampleRate, channelCount)
+    private fun hasAudioEncoder(sampleRate: Int, channelCount: Int, bitrate: Int): Boolean {
+        val query = AudioEncoderQuery(sampleRate, channelCount, bitrate)
         return audioEncoderSupportCache.computeIfAbsent(query) {
             runCatching {
                 MediaCodecList(MediaCodecList.ALL_CODECS).codecInfos.any { codecInfo ->
                     codecInfo.isEncoder && codecInfo.supportedTypes.any { it.equals(MediaFormat.MIMETYPE_AUDIO_AAC, true) } &&
                         runCatching {
-                            val audio = codecInfo.getCapabilitiesForType(MediaFormat.MIMETYPE_AUDIO_AAC).audioCapabilities
-                                ?: return@runCatching false
-                            audio.isSampleRateSupported(query.sampleRate) && query.channelCount <= audio.maxInputChannelCount
+                            val capabilities = codecInfo.getCapabilitiesForType(MediaFormat.MIMETYPE_AUDIO_AAC)
+                            val audio = capabilities.audioCapabilities ?: return@runCatching false
+                            audio.isSampleRateSupported(query.sampleRate) &&
+                                query.channelCount <= audio.maxInputChannelCount &&
+                                audio.bitrateRange.contains(query.bitrate)
                         }.getOrDefault(false)
                 }
             }.getOrDefault(false)

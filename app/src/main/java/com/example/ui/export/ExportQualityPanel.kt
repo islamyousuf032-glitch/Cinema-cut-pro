@@ -8,7 +8,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.example.timeline.export.model.ExportFrameRate
 import com.example.timeline.export.model.ExportQualityPreset
 import com.example.timeline.export.model.ExportSettings
 import java.util.Locale
@@ -22,82 +21,101 @@ fun ExportQualityPanel(
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Text("Video Quality", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
 
-        // Resolution
-        val resOptions = listOf(Pair(1280, 720), Pair(1920, 1080), Pair(3840, 2160))
+        val resOptions = listOf(1280 to 720, 1920 to 1080, 3840 to 2160)
         Column {
             Text("Resolution", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
-                resOptions.forEach { res ->
-                    val isSelected = settings.resolutionWidth == res.first && settings.resolutionHeight == res.second
+                resOptions.forEach { (width, height) ->
                     FilterChip(
-                        selected = isSelected,
-                        onClick = { onSettingsChanged(settings.copy(resolutionWidth = res.first, resolutionHeight = res.second)) },
-                        label = { Text("${res.second}p") }
+                        selected = settings.resolutionWidth == width && settings.resolutionHeight == height,
+                        onClick = {
+                            val updated = settings.copy(resolutionWidth = width, resolutionHeight = height)
+                            val presetBitrate = ExportSettingsDefaults.bitrateForQualityPreset(
+                                updated.qualityPreset,
+                                width,
+                                height,
+                                updated.frameRate
+                            )
+                            onSettingsChanged(
+                                if (presetBitrate == null) updated
+                                else updated.copy(videoBitrate = presetBitrate, maxBitrate = presetBitrate)
+                            )
+                        },
+                        label = { Text("${height}p") }
                     )
                 }
             }
         }
 
-        // Frame Rate
-        val allFrameRates = listOf(
-            ExportFrameRate.FPS_23_976, ExportFrameRate.FPS_24, ExportFrameRate.FPS_25,
-            ExportFrameRate.FPS_29_97, ExportFrameRate.FPS_30, ExportFrameRate.FPS_50,
-            ExportFrameRate.FPS_59_94, ExportFrameRate.FPS_60, ExportFrameRate.FPS_120
-        )
-        Column {
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text("Frame Rate", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                "${String.format(Locale.US, "%.3f", settings.frameRate.floatValue)} fps — source rate is preserved. Mixed or variable frame rates are rejected because conversion is not implemented yet.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
+        Column {
+            Text("Bitrate Mode", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
-                allFrameRates.forEach { fps ->
+                listOf(ExportSettings.BitrateMode.VBR, ExportSettings.BitrateMode.CBR).forEach { mode ->
                     FilterChip(
-                        selected = settings.frameRate == fps,
-                        onClick = { onSettingsChanged(settings.copy(frameRate = fps)) },
-                        label = { Text(String.format(Locale.US, "%.2f", fps.floatValue).removeSuffix(".00")) }
+                        selected = settings.bitrateMode == mode,
+                        onClick = { onSettingsChanged(settings.copy(bitrateMode = mode)) },
+                        label = { Text(mode.name) }
                     )
                 }
             }
         }
 
-        // Bitrate Mode and Quality Preset
-        Row(horizontalArrangement = Arrangement.spacedBy(16.dp), modifier = Modifier.fillMaxWidth()) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text("Bitrate Mode", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
-                    ExportSettings.BitrateMode.entries.forEach { mode ->
-                        FilterChip(
-                            selected = settings.bitrateMode == mode,
-                            onClick = { onSettingsChanged(settings.copy(bitrateMode = mode)) },
-                            label = { Text(mode.name) }
-                        )
-                    }
-                }
-            }
-        }
-
-        // Quality Prefix
         Column {
             Text("Quality Preset", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
-                ExportQualityPreset.entries.forEach { qp ->
+                ExportQualityPreset.entries.forEach { preset ->
                     FilterChip(
-                        selected = settings.qualityPreset == qp,
-                        onClick = { onSettingsChanged(settings.copy(qualityPreset = qp)) },
-                        label = { Text(qp.name) }
+                        selected = settings.qualityPreset == preset,
+                        onClick = {
+                            val updated = settings.copy(qualityPreset = preset)
+                            val presetBitrate = ExportSettingsDefaults.bitrateForQualityPreset(
+                                preset,
+                                updated.resolutionWidth,
+                                updated.resolutionHeight,
+                                updated.frameRate
+                            )
+                            onSettingsChanged(
+                                if (presetBitrate == null) updated
+                                else updated.copy(videoBitrate = presetBitrate, maxBitrate = presetBitrate)
+                            )
+                        },
+                        label = { Text(preset.name) }
                     )
                 }
             }
         }
-        
-        // Video Bitrate (Simplified slider/options)
-        val bitratesMb = listOf(5, 10, 20, 50, 100)
-        Column {
-            Text("Target Bitrate", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+
+        val bitratesMbps = listOf(5, 10, 20, 50, 100)
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(
+                "Target Video Bitrate · ${String.format(Locale.US, "%.1f", settings.videoBitrate / 1_000_000f)} Mbps",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
-                bitratesMb.forEach { mb ->
-                    val isSelected = settings.videoBitrate == mb * 1_000_000
+                bitratesMbps.forEach { mbps ->
+                    val bitrate = mbps * 1_000_000
                     FilterChip(
-                        selected = isSelected,
-                        onClick = { onSettingsChanged(settings.copy(videoBitrate = mb * 1_000_000)) },
-                        label = { Text("$mb Mbps") }
+                        selected = settings.videoBitrate == bitrate,
+                        onClick = {
+                            onSettingsChanged(
+                                settings.copy(
+                                    videoBitrate = bitrate,
+                                    maxBitrate = bitrate,
+                                    qualityPreset = ExportQualityPreset.CUSTOM
+                                )
+                            )
+                        },
+                        label = { Text("$mbps Mbps") }
                     )
                 }
             }

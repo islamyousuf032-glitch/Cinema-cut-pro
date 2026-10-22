@@ -5,8 +5,6 @@ import androidx.lifecycle.AndroidViewModel
 import com.example.timeline.core.TimelineProject
 import com.example.timeline.export.backend.ExportBackendFactory
 import com.example.timeline.export.model.*
-import com.example.timeline.media.FrameRate
-import kotlin.math.abs
 import com.example.timeline.export.preset.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -24,7 +22,7 @@ class ExportSettingsViewModel(application: Application) : AndroidViewModel(appli
     val uiState: StateFlow<ExportSettingsUiState> = _uiState.asStateFlow()
 
     fun initProject(project: TimelineProject) {
-        val initialSettings = adaptToSimpleSource(
+        val initialSettings = ExportSettingsDefaults.adaptToSimpleSource(
             ExportPresetManager.getSettingsForPreset(
                 ExportPresetType.YOUTUBE_1080P,
                 project.id,
@@ -50,7 +48,12 @@ class ExportSettingsViewModel(application: Application) : AndroidViewModel(appli
             return
         }
         if (_uiState.value.project != project) {
-            _uiState.update { it.copy(project = project) }
+            _uiState.update { state ->
+                val adaptedSettings = state.currentSettings?.let {
+                    ExportSettingsDefaults.adaptToSimpleSource(it, project)
+                }
+                state.copy(project = project, currentSettings = adaptedSettings)
+            }
             validateSettings()
         }
     }
@@ -68,7 +71,7 @@ class ExportSettingsViewModel(application: Application) : AndroidViewModel(appli
 
     fun selectPreset(preset: ExportPresetType) {
         val project = _uiState.value.project ?: return
-        val newSettings = adaptToSimpleSource(
+        val newSettings = ExportSettingsDefaults.adaptToSimpleSource(
             ExportPresetManager.getSettingsForPreset(
                 preset,
                 project.id,
@@ -141,49 +144,6 @@ class ExportSettingsViewModel(application: Application) : AndroidViewModel(appli
         }
     }
 
-    /**
-     * Defaults follow project timing. The current Media3 adapter still requires a CFR source rate
-     * that matches the requested output rate, so mismatches remain explicitly rejected by validation.
-     */
-    private fun adaptToSimpleSource(settings: ExportSettings, project: TimelineProject): ExportSettings {
-        val projectRate = project.settings.getFpsRational()
-        val projectExportRate = projectRate.takeIf { it.numerator > 0 && it.denominator > 0 }
-            ?.let { ExportFrameRate(it.numerator, it.denominator) }
-        val activeClips = project.tracks
-            .filter { it.type == com.example.timeline.core.TrackType.VIDEO && it.isVisible }
-            .flatMap { track -> track.clips.filter { it.isEnabled }.map { track to it } }
-        if (activeClips.size != 1) {
-            return settings.copy(frameRate = projectExportRate ?: settings.frameRate)
-        }
-
-        val clip = activeClips.single().second
-        val asset = project.mediaAssets.firstOrNull { it.assetId == clip.mediaId }
-        val sourceRate = asset?.metadata?.exactFrameRate ?: asset?.metadata?.estimatedFrameRate
-        val exportRate = projectExportRate
-            ?: sourceRate?.takeIf { it.numerator > 0 && it.denominator > 0 }?.let(::closestExportFrameRate)
-            ?: settings.frameRate
-        val audio = asset?.metadata?.audioStreams?.singleOrNull()
-
-        return settings.copy(
-            frameRate = exportRate,
-            audioSampleRate = audio?.sampleRate ?: settings.audioSampleRate,
-            audioChannels = audio?.channelCount ?: settings.audioChannels
-        )
-    }
-
-    private fun closestExportFrameRate(source: FrameRate): ExportFrameRate {
-        val commonRates = listOf(
-            ExportFrameRate.FPS_23_976, ExportFrameRate.FPS_24, ExportFrameRate.FPS_25,
-            ExportFrameRate.FPS_29_97, ExportFrameRate.FPS_30, ExportFrameRate.FPS_50,
-            ExportFrameRate.FPS_59_94, ExportFrameRate.FPS_60, ExportFrameRate.FPS_120
-        )
-        val nearest = commonRates.minByOrNull { abs(it.floatValue - source.fpsAsFloat) }
-        return if (nearest != null && abs(nearest.floatValue - source.fpsAsFloat) <= 0.01f) {
-            nearest
-        } else {
-            ExportFrameRate(source.numerator, source.denominator)
-        }
-    }
 }
 
 data class ExportSettingsUiState(

@@ -221,30 +221,23 @@ fun ExportScreen(
                             }
                             item { HorizontalDivider() }
                             item {
-                                ExportCodecPanel(
-                                    settings = settings,
-                                    onSettingsChanged = { viewModel.updateSettings { _ -> it } }
-                                )
+                                ExportCodecPanel()
                             }
                             item { HorizontalDivider() }
                             item {
                                 ExportAudioPanel(
                                     settings = settings,
-                                    onSettingsChanged = { viewModel.updateSettings { _ -> it } }
+                                    onSettingsChanged = { viewModel.updateSettings { _ -> it } },
+                                    project = project
                                 )
                             }
                             item { HorizontalDivider() }
                             item {
-                                ExportColorPanel(
-                                    settings = settings,
-                                    onSettingsChanged = { viewModel.updateSettings { _ -> it } }
-                                )
+                                ExportColorPanel()
                             }
                             item { HorizontalDivider() }
                             item {
                                 ExportAdvancedPanel(
-                                    settings = settings,
-                                    onSettingsChanged = { viewModel.updateSettings { _ -> it } },
                                     onExportLut = { onExportLut(33) } // default sizing
                                 )
                             }

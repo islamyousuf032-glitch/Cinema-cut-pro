@@ -20,13 +20,13 @@ object SocialExportPresets {
             codec = ExportCodec.H264,
             container = ExportContainer.MP4,
             videoBitrate = 8_000_000,
-            maxBitrate = 12_000_000,
+            maxBitrate = 8_000_000,
             bitrateMode = ExportSettings.BitrateMode.VBR,
             keyframeInterval = 2,
             qualityPreset = ExportQualityPreset.HIGH,
             audioSampleRate = 48000,
             audioChannels = 2,
-            audioBitrate = 384_000
+            audioBitrate = 320_000
         )
     }
 
@@ -39,16 +39,16 @@ object SocialExportPresets {
             resolutionWidth = 3840,
             resolutionHeight = 2160,
             frameRate = ExportFrameRate.FPS_60,
-            codec = ExportCodec.H265,
+            codec = ExportCodec.H264,
             container = ExportContainer.MP4,
             videoBitrate = 45_000_000,
-            maxBitrate = 60_000_000,
+            maxBitrate = 45_000_000,
             bitrateMode = ExportSettings.BitrateMode.VBR,
             keyframeInterval = 2,
             qualityPreset = ExportQualityPreset.MASTER,
             audioSampleRate = 48000,
             audioChannels = 2,
-            audioBitrate = 384_000
+            audioBitrate = 320_000
         )
     }
 
@@ -64,7 +64,7 @@ object SocialExportPresets {
             codec = ExportCodec.H264,
             container = ExportContainer.MP4,
             videoBitrate = 8_000_000,
-            maxBitrate = 12_000_000,
+            maxBitrate = 8_000_000,
             bitrateMode = ExportSettings.BitrateMode.VBR,
             keyframeInterval = 2,
             qualityPreset = ExportQualityPreset.HIGH,
@@ -86,7 +86,7 @@ object SocialExportPresets {
             codec = ExportCodec.H264,
             container = ExportContainer.MP4,
             videoBitrate = 8_000_000,
-            maxBitrate = 10_000_000,
+            maxBitrate = 8_000_000,
             bitrateMode = ExportSettings.BitrateMode.VBR,
             keyframeInterval = 2,
             qualityPreset = ExportQualityPreset.HIGH,
@@ -108,7 +108,7 @@ object SocialExportPresets {
             codec = ExportCodec.H264,
             container = ExportContainer.MP4,
             videoBitrate = 8_000_000,
-            maxBitrate = 10_000_000,
+            maxBitrate = 8_000_000,
             bitrateMode = ExportSettings.BitrateMode.VBR,
             keyframeInterval = 2,
             qualityPreset = ExportQualityPreset.HIGH,
@@ -130,7 +130,7 @@ object SocialExportPresets {
             codec = ExportCodec.H264,
             container = ExportContainer.MP4,
             videoBitrate = 4_000_000,
-            maxBitrate = 8_000_000,
+            maxBitrate = 4_000_000,
             bitrateMode = ExportSettings.BitrateMode.VBR,
             keyframeInterval = 2,
             qualityPreset = ExportQualityPreset.STANDARD,

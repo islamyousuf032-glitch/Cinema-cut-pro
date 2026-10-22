@@ -1,50 +1,28 @@
 package com.example.ui.export
 
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.material3.*
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.example.timeline.export.model.ExportCodec
-import com.example.timeline.export.model.ExportContainer
-import com.example.timeline.export.model.ExportSettings
 
 @Composable
-fun ExportCodecPanel(
-    settings: ExportSettings,
-    onSettingsChanged: (ExportSettings) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(16.dp)) {
+fun ExportCodecPanel(modifier: Modifier = Modifier) {
+    // The bounded Media3 Transformer backend only produces H.264 in MP4. Avoid showing selectable
+    // MOV/MKV, HEVC, AV1, ProRes, or image-sequence options that cannot reach a real renderer.
+    Column(modifier = modifier) {
         Text("Format & Codec", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
-
-        Column {
-            Text("Container / Format", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
-                ExportContainer.entries.forEach { container ->
-                    FilterChip(
-                        selected = settings.container == container,
-                        onClick = { onSettingsChanged(settings.copy(container = container)) },
-                        label = { Text(container.name) }
-                    )
-                }
-            }
-        }
-
-        Column {
-            Text("Video Codec", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
-                ExportCodec.entries.forEach { codec ->
-                    FilterChip(
-                        selected = settings.codec == codec,
-                        onClick = { onSettingsChanged(settings.copy(codec = codec)) },
-                        label = { Text(codec.name) }
-                    )
-                }
-            }
-        }
+        Spacer(Modifier.height(8.dp))
+        Text("MP4 container · H.264 video", style = MaterialTheme.typography.bodyLarge)
+        Text(
+            "This is the only video format currently implemented by the Android export backend. " +
+                "HEVC, AV1, ProRes, MOV, MKV, and image-sequence export are not available yet.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
