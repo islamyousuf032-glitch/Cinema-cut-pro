@@ -151,9 +151,13 @@ jobs:
           if not log.exists():
               raise SystemExit(0)
           lines = log.read_text(errors="replace").splitlines()
-          # Keep the complete Gradle tail rather than only matching keywords: the useful
-          # exception is often on the line immediately after "What went wrong:".
-          excerpt = [line[:1000] for line in lines[-50:]]
+          # Include both the opening failure report and the stack-trace tail. Gradle can
+          # place the actual cause near the start and leave only frames at the end.
+          if len(lines) <= 60:
+              excerpt = lines
+          else:
+              excerpt = lines[:20] + ["... (middle of Gradle log omitted) ..."] + lines[-40:]
+          excerpt = [line[:1000] for line in excerpt]
           report = "APK assembly failure details:\n\n```text\n" + "\n".join(excerpt) + "\n```\n"
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
               summary.write(report)
