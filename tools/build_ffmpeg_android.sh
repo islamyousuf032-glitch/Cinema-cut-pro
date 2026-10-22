@@ -111,9 +111,9 @@ for generated_dir in "${BUILD_DIR}" "${PREFIX}" "${JNI_LIBS_ROOT}" "${ASSETS_ROO
     if [[ "${WORK_DIR}" == "${ROOT_DIR}/app/build/ffmpeg-android" ]]; then
       case "${generated_dir}" in
         "${BUILD_DIR}")
-          if is_empty_directory "${BUILD_DIR}"; then
-            known_gradle_cache_output=true
-          fi
+          # This private build tree is disposable by design. It is not a source path, and Gradle
+          # may materialize its output directory before the Exec task (or restore partial cache data).
+          known_gradle_cache_output=true
           ;;
         "${PREFIX}")
           if is_empty_directory "${PREFIX}" || \
