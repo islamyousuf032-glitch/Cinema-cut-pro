@@ -52,6 +52,62 @@ uint8_t toSrgbByte(double linear) {
     return encodeTable[index];
 }
 
+struct GradeLookup {
+    bool enabled = false;
+    std::array<std::array<uint8_t, 256>, 3> channels{};
+};
+
+GradeLookup makeGradeLookup(const PreviewGrade& grade) {
+    GradeLookup lookup;
+    const double exposure = std::isfinite(grade.exposureStops)
+        ? std::exp2(std::clamp(grade.exposureStops, -16.0, 16.0)) : 1.0;
+    const double temperature = std::isfinite(grade.temperature)
+        ? std::clamp(grade.temperature, -1.0, 1.0) : 0.0;
+    const double tint = std::isfinite(grade.tint)
+        ? std::clamp(grade.tint, -1.0, 1.0) : 0.0;
+    const std::array<double, 3> temperatureTint{{
+        1.0 + temperature + tint,
+        1.0 + tint,
+        1.0 - temperature,
+    }};
+    const auto& temp = temperatureTint;
+    const bool active = std::abs(exposure - 1.0) > 1e-9 ||
+        std::abs(temperature) > 1e-9 || std::abs(tint) > 1e-9 ||
+        std::any_of(grade.lift.begin(), grade.lift.end(), [](double value) { return std::abs(value) > 1e-9; }) ||
+        std::any_of(grade.gamma.begin(), grade.gamma.end(), [](double value) { return std::abs(value - 1.0) > 1e-9; }) ||
+        std::any_of(grade.gain.begin(), grade.gain.end(), [](double value) { return std::abs(value - 1.0) > 1e-9; }) ||
+        std::any_of(grade.offset.begin(), grade.offset.end(), [](double value) { return std::abs(value) > 1e-9; });
+    if (!active) return lookup;
+
+    lookup.enabled = true;
+    for (size_t channel = 0; channel < lookup.channels.size(); ++channel) {
+        const double lift = std::isfinite(grade.lift[channel])
+            ? std::clamp(grade.lift[channel], -1.0, 1.0) : 0.0;
+        const double gamma = std::isfinite(grade.gamma[channel])
+            ? std::max(grade.gamma[channel], 0.001) : 1.0;
+        const double gain = std::isfinite(grade.gain[channel])
+            ? std::clamp(grade.gain[channel], 0.0, 64.0) : 1.0;
+        const double offset = std::isfinite(grade.offset[channel])
+            ? std::clamp(grade.offset[channel], -4.0, 4.0) : 0.0;
+        const double tempMultiplier = std::isfinite(temp[channel]) ? temp[channel] : 1.0;
+        for (size_t input = 0; input < lookup.channels[channel].size(); ++input) {
+            int value = static_cast<int>(input);
+            value = std::min(255, static_cast<int>(value * exposure));
+            value = std::clamp(static_cast<int>(value * tempMultiplier), 0, 255);
+            value = std::clamp(static_cast<int>(value + offset * 255.0), 0, 255);
+            double normalized = static_cast<double>(value) / 255.0;
+            normalized += lift * (1.0 - normalized);
+            if (gamma != 1.0 && normalized > 0.0) {
+                normalized = std::pow(normalized, 1.0 / gamma);
+            }
+            normalized *= gain;
+            lookup.channels[channel][input] = static_cast<uint8_t>(
+                std::clamp(static_cast<int>(normalized * 255.0), 0, 255));
+        }
+    }
+    return lookup;
+}
+
 }  // namespace
 
 bool renderBayerPreview(
@@ -61,8 +117,12 @@ bool renderBayerPreview(
     const BayerPreviewMetadata& metadata,
     const int maximumEdge,
     RgbaPreview& output,
-    std::string* error) {
-    output = {};
+    std::string* error,
+    const PreviewGrade& grade,
+    int rotationDegrees) {
+    output.width = 0;
+    output.height = 0;
+    output.pixels.clear();
     if (raw == nullptr) return fail("RAW frame buffer is null", error);
     if (sourceWidth < 2 || sourceHeight < 2) return fail("RAW frame dimensions are invalid", error);
     if (metadata.cfaPattern.size() != 4 ||
@@ -73,11 +133,16 @@ bool renderBayerPreview(
         return fail("Unsupported Bayer CFA pattern", error);
     }
     if (maximumEdge <= 0) return fail("Preview edge must be positive", error);
+    rotationDegrees = ((rotationDegrees % 360) + 360) % 360;
+    if (rotationDegrees % 90 != 0) return fail("Only right-angle MotionCam rotations are supported", error);
 
     const double scale = std::min(1.0, static_cast<double>(maximumEdge) /
         static_cast<double>(std::max(sourceWidth, sourceHeight)));
-    const int outputWidth = std::max(2, static_cast<int>(std::lround(sourceWidth * scale)));
-    const int outputHeight = std::max(2, static_cast<int>(std::lround(sourceHeight * scale)));
+    const int sampledWidth = std::max(2, static_cast<int>(std::lround(sourceWidth * scale)));
+    const int sampledHeight = std::max(2, static_cast<int>(std::lround(sourceHeight * scale)));
+    const bool swapsDimensions = rotationDegrees == 90 || rotationDegrees == 270;
+    const int outputWidth = swapsDimensions ? sampledHeight : sampledWidth;
+    const int outputHeight = swapsDimensions ? sampledWidth : sampledHeight;
     const uint64_t outputPixels = static_cast<uint64_t>(outputWidth) * static_cast<uint64_t>(outputHeight);
     if (outputPixels > static_cast<uint64_t>(std::numeric_limits<size_t>::max() / sizeof(uint32_t))) {
         return fail("Preview dimensions overflow", error);
@@ -86,6 +151,7 @@ bool renderBayerPreview(
     output.width = outputWidth;
     output.height = outputHeight;
     output.pixels.resize(static_cast<size_t>(outputPixels));
+    const GradeLookup gradeLookup = makeGradeLookup(grade);
 
     const double white = std::isfinite(metadata.whiteLevel) && metadata.whiteLevel > 0.0
         ? metadata.whiteLevel : 65535.0;
@@ -167,20 +233,46 @@ bool renderBayerPreview(
     };
 
     for (int y = 0; y < outputHeight; ++y) {
-        const int sourceY = std::min(sourceHeight - 1,
-            static_cast<int>((static_cast<int64_t>(2 * y + 1) * sourceHeight) / (2 * outputHeight)));
         for (int x = 0; x < outputWidth; ++x) {
+            int sampledX = x;
+            int sampledY = y;
+            switch (rotationDegrees) {
+                case 90:
+                    sampledX = y;
+                    sampledY = sampledHeight - 1 - x;
+                    break;
+                case 180:
+                    sampledX = sampledWidth - 1 - x;
+                    sampledY = sampledHeight - 1 - y;
+                    break;
+                case 270:
+                    sampledX = sampledWidth - 1 - y;
+                    sampledY = x;
+                    break;
+                default:
+                    break;
+            }
             const int sourceX = std::min(sourceWidth - 1,
-                static_cast<int>((static_cast<int64_t>(2 * x + 1) * sourceWidth) / (2 * outputWidth)));
+                static_cast<int>((static_cast<int64_t>(2 * sampledX + 1) * sourceWidth) / (2 * sampledWidth)));
+            const int sourceY = std::min(sourceHeight - 1,
+                static_cast<int>((static_cast<int64_t>(2 * sampledY + 1) * sourceHeight) / (2 * sampledHeight)));
             const auto camera = interpolateChannels(sourceX, sourceY);
             double red = camera[0] * metadata.whiteBalanceGain[0];
             double green = camera[1] * metadata.whiteBalanceGain[1];
             double blue = camera[2] * metadata.whiteBalanceGain[2];
             applyForwardMatrix(red, green, blue);
+            uint8_t redByte = toSrgbByte(red);
+            uint8_t greenByte = toSrgbByte(green);
+            uint8_t blueByte = toSrgbByte(blue);
+            if (gradeLookup.enabled) {
+                redByte = gradeLookup.channels[0][redByte];
+                greenByte = gradeLookup.channels[1][greenByte];
+                blueByte = gradeLookup.channels[2][blueByte];
+            }
             const uint32_t pixel = 0xff000000u |
-                (static_cast<uint32_t>(toSrgbByte(red)) << 16u) |
-                (static_cast<uint32_t>(toSrgbByte(green)) << 8u) |
-                static_cast<uint32_t>(toSrgbByte(blue));
+                (static_cast<uint32_t>(redByte) << 16u) |
+                (static_cast<uint32_t>(greenByte) << 8u) |
+                static_cast<uint32_t>(blueByte);
             output.pixels[static_cast<size_t>(y) * static_cast<size_t>(outputWidth) + static_cast<size_t>(x)] = pixel;
         }
     }

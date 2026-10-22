@@ -41,6 +41,9 @@ struct DecoderHandle {
     int sourceFd = -1;
     std::unique_ptr<motioncam::Decoder> decoder;
     std::unique_ptr<motioncam::Decoder> audioDecoder;
+    std::vector<uint8_t> previewRawBytes;
+    Json previewFrameMetadata;
+    cinema::mcraw::RgbaPreview previewBitmap;
     std::vector<int16_t> pendingAudioSamples;
     int64_t pendingAudioTimestampNs = -1;
     size_t pendingAudioOffset = 0;
@@ -249,7 +252,8 @@ Java_com_example_timeline_media_NativeMcrawDecoder_nativeGetFrameMetadataJson(
 
 extern "C" JNIEXPORT jobject JNICALL
 Java_com_example_timeline_media_NativeMcrawDecoder_nativeDecodeFrameToBitmap(
-    JNIEnv* env, jobject, const jlong value, const jint index, const jint requestedMaximumEdge) {
+    JNIEnv* env, jobject, const jlong value, const jint index, const jint requestedMaximumEdge,
+    const jfloatArray requestedGradeParams) {
     DecoderHandle* handle = asHandle(value);
     if (handle == nullptr || handle->decoder == nullptr) {
         throwIoException(env, "MotionCam decoder is closed");
@@ -263,8 +267,8 @@ Java_com_example_timeline_media_NativeMcrawDecoder_nativeDecodeFrameToBitmap(
             throw motioncam::IOException("MCRAW frame index is out of bounds");
         }
 
-        std::vector<uint8_t> rawBytes;
-        Json frameMetadata;
+        auto& rawBytes = handle->previewRawBytes;
+        auto& frameMetadata = handle->previewFrameMetadata;
         handle->decoder->loadFrame(frames[static_cast<size_t>(index)], rawBytes, frameMetadata);
         const int width = frameMetadata.at("width").get<int>();
         const int height = frameMetadata.at("height").get<int>();
@@ -277,7 +281,30 @@ Java_com_example_timeline_media_NativeMcrawDecoder_nativeDecodeFrameToBitmap(
         }
 
         const int maximumEdge = std::clamp(requestedMaximumEdge, 64, 2048);
-        cinema::mcraw::RgbaPreview preview;
+        cinema::mcraw::PreviewGrade grade;
+        if (requestedGradeParams != nullptr) {
+            if (env->GetArrayLength(requestedGradeParams) != 15) {
+                throw motioncam::IOException("MotionCam grade payload must contain exactly 15 values");
+            }
+            jfloat values[15]{};
+            env->GetFloatArrayRegion(requestedGradeParams, 0, 15, values);
+            if (env->ExceptionCheck()) return nullptr;
+            grade.exposureStops = values[0];
+            grade.temperature = values[1];
+            grade.tint = values[2];
+            for (size_t channel = 0; channel < 3; ++channel) {
+                grade.lift[channel] = values[3 + channel];
+                grade.gamma[channel] = values[6 + channel];
+                grade.gain[channel] = values[9 + channel];
+                grade.offset[channel] = values[12 + channel];
+            }
+        }
+        int rotationDegrees = 0;
+        const auto rotation = frameMetadata.find("rotationDegrees");
+        if (rotation != frameMetadata.end() && rotation->is_number()) {
+            rotationDegrees = static_cast<int>(rotation->get<double>());
+        }
+
         std::string renderError;
         if (!cinema::mcraw::renderBayerPreview(
                 reinterpret_cast<const uint16_t*>(rawBytes.data()),
@@ -285,10 +312,13 @@ Java_com_example_timeline_media_NativeMcrawDecoder_nativeDecodeFrameToBitmap(
                 height,
                 makePreviewMetadata(handle->decoder->getContainerMetadata(), frameMetadata),
                 maximumEdge,
-                preview,
-                &renderError)) {
+                handle->previewBitmap,
+                &renderError,
+                grade,
+                rotationDegrees)) {
             throw motioncam::IOException(renderError.empty() ? "Could not render MCRAW preview" : renderError);
         }
+        const auto& preview = handle->previewBitmap;
 
         jclass bitmapClass = env->FindClass("android/graphics/Bitmap");
         jclass configClass = env->FindClass("android/graphics/Bitmap$Config");

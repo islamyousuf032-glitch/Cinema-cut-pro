@@ -64,9 +64,14 @@ internal object NativeMcrawDecoder {
         return nativeGetFrameMetadataJson(handle, index)
     }
 
-    fun decodeFrame(handle: Long, index: Int, maximumEdge: Int = 960): Bitmap {
+    fun decodeFrame(
+        handle: Long,
+        index: Int,
+        maximumEdge: Int = 960,
+        gradeParams: FloatArray? = null
+    ): Bitmap {
         requireLibrary()
-        return nativeDecodeFrameToBitmap(handle, index, maximumEdge)
+        return nativeDecodeFrameToBitmap(handle, index, maximumEdge, gradeParams)
             ?: throw IOException(lastError(handle).ifBlank { "Could not render MotionCam RAW frame" })
     }
 
@@ -112,7 +117,12 @@ internal object NativeMcrawDecoder {
     private external fun nativeGetFrameTimestampNs(handle: Long, index: Int): Long
     private external fun nativeGetContainerMetadataJson(handle: Long): String
     private external fun nativeGetFrameMetadataJson(handle: Long, index: Int): String
-    private external fun nativeDecodeFrameToBitmap(handle: Long, index: Int, maximumEdge: Int): Bitmap?
+    private external fun nativeDecodeFrameToBitmap(
+        handle: Long,
+        index: Int,
+        maximumEdge: Int,
+        gradeParams: FloatArray?
+    ): Bitmap?
     private external fun nativeGetAudioSampleRateHz(handle: Long): Int
     private external fun nativeGetAudioChannelCount(handle: Long): Int
     private external fun nativeHasGyroData(handle: Long): Boolean

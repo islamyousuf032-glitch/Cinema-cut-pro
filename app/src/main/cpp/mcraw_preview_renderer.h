@@ -24,6 +24,17 @@ struct RgbaPreview {
     std::vector<uint32_t> pixels;
 };
 
+/** Supported primary RAW preview adjustments, applied directly during Bayer rendering. */
+struct PreviewGrade {
+    double exposureStops = 0.0;
+    double temperature = 0.0;
+    double tint = 0.0;
+    std::array<double, 3> lift{{0.0, 0.0, 0.0}};
+    std::array<double, 3> gamma{{1.0, 1.0, 1.0}};
+    std::array<double, 3> gain{{1.0, 1.0, 1.0}};
+    std::array<double, 3> offset{{0.0, 0.0, 0.0}};
+};
+
 /**
  * Builds a bounded, display-ready preview from one 16-bit Bayer frame.
  * This is a simple bilinear/demosaic preview path, not a full camera ISP.
@@ -35,6 +46,8 @@ bool renderBayerPreview(
     const BayerPreviewMetadata& metadata,
     int maximumEdge,
     RgbaPreview& output,
-    std::string* error = nullptr);
+    std::string* error = nullptr,
+    const PreviewGrade& grade = {},
+    int rotationDegrees = 0);
 
 }  // namespace cinema::mcraw

@@ -2,11 +2,9 @@ package com.example.timeline.engine.preview
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.Matrix
 import android.net.Uri
 import android.view.Surface
 import com.example.model.adjustments.VideoAdjustmentParams
-import com.example.model.adjustments.engine.CpuFrameProcessor
 import com.example.timeline.media.NativeMcrawDecoder
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -21,7 +19,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import org.json.JSONObject
 import kotlin.math.abs
 
 /**
@@ -176,35 +173,12 @@ class MotionCamRawPreviewEngine(private val context: Context) : PreviewEngine {
         index: Int,
         maximumEdge: Int = STILL_MAX_EDGE,
         params: VideoAdjustmentParams = previewAdjustmentParams
-    ): Bitmap {
-        val decoded = NativeMcrawDecoder.decodeFrame(handle, index, maximumEdge)
-        val rotation = runCatching {
-            JSONObject(NativeMcrawDecoder.frameMetadataJson(handle, index))
-                .optInt("rotationDegrees", 0)
-                .let { ((it % 360) + 360) % 360 }
-        }.getOrDefault(0)
-        val oriented = if (rotation == 0) {
-            decoded
-        } else {
-            val matrix = Matrix().apply { postRotate(rotation.toFloat()) }
-            Bitmap.createBitmap(decoded, 0, 0, decoded.width, decoded.height, matrix, true)
-                .also { if (it !== decoded) decoded.recycle() }
-        }
-        if (!MotionCamPreviewGradeSupport.hasNativePreviewAdjustments(params)) return oriented
-
-        val processed = runCatching {
-            CpuFrameProcessor.process(
-                oriented,
-                MotionCamPreviewGradeSupport.paramsForNativeBitmapProcessing(params)
-            )
-        }.onFailure { error ->
-            if (com.example.BuildConfig.DEBUG) {
-                android.util.Log.w("MotionCamRawPreview", "Native RAW color adjustment failed", error)
-            }
-        }.getOrDefault(oriented)
-        if (processed !== oriented) oriented.recycle()
-        return processed
-    }
+    ): Bitmap = NativeMcrawDecoder.decodeFrame(
+        handle = handle,
+        index = index,
+        maximumEdge = maximumEdge,
+        gradeParams = MotionCamPreviewGradeSupport.nativeGradeParams(params)
+    )
 
     /** Uses source timestamps as a wall-clock target and skips missed frames instead of slowing the clip. */
     private fun startPlaybackLoop() {
