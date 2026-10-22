@@ -30,10 +30,10 @@ object ExportCodecValidator {
                     }
                 } else if (container == ExportContainer.MKV || container == ExportContainer.MOV) {
                     if (!hasFfmpeg) {
-                        errors.add("Requires FFmpeg backend for \${container.name} container.")
+                        errors.add("Requires FFmpeg backend for ${container.name} container.")
                     }
                 } else {
-                    errors.add("Container \${container.name} not supported with H.264.")
+                    errors.add("Container ${container.name} not supported with H.264.")
                 }
             }
             ExportCodec.H265 -> {
@@ -43,10 +43,10 @@ object ExportCodecValidator {
                     }
                 } else if (container == ExportContainer.MKV || container == ExportContainer.MOV) {
                     if (!hasFfmpeg) {
-                        errors.add("Requires FFmpeg backend for \${container.name} container.")
+                        errors.add("Requires FFmpeg backend for ${container.name} container.")
                     }
                 } else {
-                    errors.add("Container \${container.name} not supported with H.265.")
+                    errors.add("Container ${container.name} not supported with H.265.")
                 }
             }
             ExportCodec.AV1 -> {
@@ -57,7 +57,7 @@ object ExportCodecValidator {
                         errors.add("AV1 codec is not supported by device or backend.")
                     }
                 } else {
-                    errors.add("Container \${container.name} not supported with AV1.")
+                    errors.add("Container ${container.name} not supported with AV1.")
                 }
             }
             ExportCodec.PRORES -> {

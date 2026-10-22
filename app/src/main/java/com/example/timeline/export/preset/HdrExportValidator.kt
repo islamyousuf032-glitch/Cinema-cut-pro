@@ -36,7 +36,7 @@ object HdrExportValidator {
                     warnings.add("HDR export with FFmpeg backend may have performance limitations.")
                 }
             } else {
-                 errors.add("Unsupported HDR color space: \${colorOutput.name}")
+                 errors.add("Unsupported HDR color space: ${colorOutput.name}")
             }
         }
 

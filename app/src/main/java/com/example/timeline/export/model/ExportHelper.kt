@@ -88,7 +88,7 @@ object ExportHelper {
         val warnings = mutableListOf<String>()
 
         if (settings.resolutionWidth <= 0 || settings.resolutionHeight <= 0) {
-            errors.add("Invalid resolution: \${settings.resolutionWidth}x\${settings.resolutionHeight}")
+            errors.add("Invalid resolution: ${settings.resolutionWidth}x${settings.resolutionHeight}")
         }
         
         if (settings.frameRate.numerator <= 0 || settings.frameRate.denominator <= 0) {

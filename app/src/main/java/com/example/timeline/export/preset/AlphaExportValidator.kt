@@ -35,7 +35,7 @@ object AlphaExportValidator {
                      warnings.add("AV1 Alpha channel support is experimental.")
                 }
                 else -> {
-                    errors.add("Alpha channel export is not supported with \${codec.name} codec.")
+                    errors.add("Alpha channel export is not supported with ${codec.name} codec.")
                 }
             }
         }

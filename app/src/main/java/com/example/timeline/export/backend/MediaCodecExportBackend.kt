@@ -45,10 +45,10 @@ class MediaCodecExportBackend(private val context: Context) : ExportBackend {
         val cap = getCapabilities()
         
         if (!cap.backendAvailable) errors.add("MediaCodec backend not available")
-        if (settings.codec !in cap.supportedCodecs) errors.add("Codec \${settings.codec} not supported by MediaCodec")
-        if (settings.container !in cap.supportedContainers) errors.add("Container \${settings.container} not supported by MediaCodec")
+        if (settings.codec !in cap.supportedCodecs) errors.add("Codec ${settings.codec} not supported by MediaCodec")
+        if (settings.container !in cap.supportedContainers) errors.add("Container ${settings.container} not supported by MediaCodec")
         if (settings.resolutionWidth > cap.maxResolutionWidth || settings.resolutionHeight > cap.maxResolutionHeight) {
-            errors.add("Resolution \${settings.resolutionWidth}x\${settings.resolutionHeight} exceeds maximum limits")
+            errors.add("Resolution ${settings.resolutionWidth}x${settings.resolutionHeight} exceeds maximum limits")
         }
         
         return ExportValidationResult(
@@ -76,7 +76,7 @@ class MediaCodecExportBackend(private val context: Context) : ExportBackend {
         val outputFile = if (job.outputUri != null) {
             java.io.File(job.outputUri)
         } else {
-            java.io.File(context.cacheDir, "export_\${System.currentTimeMillis()}.mp4")
+            java.io.File(context.cacheDir, "export_${System.currentTimeMillis()}.mp4")
         }
         
         // Let ProgressTracker calculate it based on clips
