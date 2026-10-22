@@ -1,6 +1,6 @@
 # Playback, live grading, and bounded export
 
-**Current verification:** GitHub Actions run `39800198201` passed Android Kotlin/native CMake compilation, JVM tests, the C++ host suite (including the Bayer preview renderer and upstream MotionCam decoder tests), and FFmpeg build-script syntax on commit `dbb3357`. The first gated test-release run (`39802315219`) passed those checks but failed during `:app:assembleDebug`; APK license verification, checksumming, and publishing were skipped. CI run `39806841865` exposed the cause: Gradle 9.3.1 rejected `prefix/include` being declared as a file output because it is a directory. `app/build.gradle.kts` now declares it with `outputs.dir`, and the workflow runs a second no-APK FFmpeg Gradle invocation to validate that output declaration before the gated release build. Verification and APK assembly must pass on the retry; no verified APK has been shared. This sandbox has no Android SDK/NDK or Java runtime. No physical-device test has been performed; the user will do device testing.
+**Current verification:** GitHub Actions run `39808454671` passed Android Kotlin/native CMake compilation, JVM tests, C++ host tests (including the Bayer preview renderer and upstream MotionCam decoder), FFmpeg script syntax, and a second FFmpeg Gradle-output validation. The gated debug APK assembled successfully; the workflow verified its bundled MotionCam/FFmpeg license assets, generated a SHA-256 sidecar, uploaded the artifact, and published prerelease `android-test-75-1`. [Download the APK](https://github.com/islamyousuf032-glitch/Cinema-cut-pro/releases/download/android-test-75-1/Cinema-Cut-Pro-debug-75-1.apk) · [SHA-256 sidecar](https://github.com/islamyousuf032-glitch/Cinema-cut-pro/releases/download/android-test-75-1/Cinema-Cut-Pro-debug-75-1.apk.sha256). It is debug-signed and for device testing only. No physical-device test has been performed; the user will do device testing.
 
 ## Playback routes
 
@@ -32,6 +32,6 @@ Size estimates use overflow-safe arithmetic. At runtime, the queue checks source
 
 ## Remaining validation
 
-- CI must pass Android Kotlin/JNI/CMake compilation and JVM tests, plus native host tests and FFmpeg build-script syntax, before a test APK is prepared.
+- Android Kotlin/JNI/CMake compilation, JVM and native host tests, FFmpeg script/Gradle-output checks, APK assembly, and bundled-license verification all passed in run `39808454671`; only on-device validation remains.
 - On-device playback, export, audio synchronization, device-specific encoders, MotionCam frame rate/memory/color, and content-provider behavior remain for the user to test. A short unmodified `.mcraw` sample and any target-device logs will help diagnose failures.
 - For the reported 4K 10-bit HLG source, collect the original file (or a short unmodified sample), container/video/audio codec and profile, bit depth, frame rate, HDR transfer/primaries, rotation, and playback logs before drawing conclusions.
