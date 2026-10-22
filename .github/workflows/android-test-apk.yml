@@ -68,6 +68,7 @@ jobs:
           pattern = re.compile(
               r"FAILURE:|What went wrong:|Execution failed for task|"
               r"Caused by:|Could not resolve|Unresolved reference|"
+              r"FFmpeg|NDK|Refusing to remove|source pin|config_components|"
               r"^e: |error:|Internal error|Exception is:|BUILD FAILED|"
               r"Test process|Test Executor|There were failing tests|AssertionError|"
               r"tests? completed|tests? failed|No tests found",
@@ -78,6 +79,8 @@ jobs:
           for index, line in enumerate(lines):
               if re.search(r"Test process encountered|Gradle Test Executor|There were failing tests", line, re.IGNORECASE):
                   context.extend(lines[max(0, index - 4):min(len(lines), index + 18)])
+              if re.search(r"buildFfmpegAndroid|FFmpeg build|NDK|source pin|Refusing to remove", line, re.IGNORECASE):
+                  context.extend(lines[max(0, index - 3):min(len(lines), index + 24)])
           excerpt = list(dict.fromkeys((matches[-45:] if matches else lines[-60:]) + context))
 
           test_failures = []
