@@ -116,10 +116,10 @@ for generated_dir in "${BUILD_DIR}" "${PREFIX}" "${JNI_LIBS_ROOT}" "${ASSETS_ROO
           known_gradle_cache_output=true
           ;;
         "${PREFIX}")
-          if is_empty_directory "${PREFIX}" || \
-            { [[ -d "${PREFIX}/include" && -d "${PREFIX}/lib" ]] && \
-              ! find "${PREFIX}" -mindepth 1 -maxdepth 1 \
-                ! -name include ! -name lib ! -name FFMPEG_BUILD_INFO.txt -print -quit | grep -q .; }; then
+          # Gradle may create/cache only a subset of the declared prefix outputs. The legacy cache
+          # is safe to clear when every top-level entry is one of our generated prefix paths.
+          if ! find "${PREFIX}" -mindepth 1 -maxdepth 1 \
+            ! -name include ! -name lib ! -name FFMPEG_BUILD_INFO.txt -print -quit | grep -q .; then
             known_gradle_cache_output=true
           fi
           ;;
