@@ -77,6 +77,16 @@ import kotlin.math.roundToLong
  * exactly by trims and a presentation resize. Gaps must be fixed on the timeline before export.
  * Everything else is rejected before export; it is never handed to a placeholder exporter.
  */
+internal fun isWithinMedia3ResolutionLimit(
+    width: Int,
+    height: Int,
+    maximumLongEdge: Int,
+    maximumShortEdge: Int
+): Boolean {
+    if (width <= 0 || height <= 0) return false
+    return maxOf(width, height) <= maximumLongEdge && minOf(width, height) <= maximumShortEdge
+}
+
 @OptIn(UnstableApi::class)
 class Media3TransformerBackend(context: Context) : ExportBackend {
     override val backendType: ExportBackendType = ExportBackendType.MEDIA3_TRANSFORMER
@@ -380,10 +390,14 @@ class Media3TransformerBackend(context: Context) : ExportBackend {
         ) {
             errors += "H.264 output dimensions must be positive, even pixel dimensions."
         }
-        if (settings.resolutionWidth > capabilities.maxResolutionWidth ||
-            settings.resolutionHeight > capabilities.maxResolutionHeight
+        if (!isWithinMedia3ResolutionLimit(
+                settings.resolutionWidth,
+                settings.resolutionHeight,
+                maximumLongEdge = capabilities.maxResolutionWidth,
+                maximumShortEdge = capabilities.maxResolutionHeight
+            )
         ) {
-            errors += "The requested output resolution exceeds the supported adapter limit."
+            errors += "The requested output resolution exceeds the supported adapter limit (4K long edge, 2160-pixel short edge)."
         }
         if (settings.frameRate.numerator <= 0 || settings.frameRate.denominator <= 0 ||
             !settings.frameRate.floatValue.isFinite() || settings.frameRate.floatValue > capabilities.maxFps
@@ -396,7 +410,11 @@ class Media3TransformerBackend(context: Context) : ExportBackend {
             errors += "This export path exposes one target bitrate only; set maximum bitrate equal to the target bitrate."
         }
         if (settings.audioBitrate <= 0) errors += "The target audio bitrate must be positive."
-        if (settings.keyframeInterval <= 0) errors += "The keyframe interval must be positive."
+        if (settings.audioSampleRate <= 0) errors += "The AAC sample rate must be positive."
+        if (settings.audioChannels !in 1..2) errors += "This export path supports mono or stereo AAC output only."
+        if (settings.keyframeInterval !in 1..120) {
+            errors += "The H.264 keyframe interval must be between 1 and 120 seconds."
+        }
         if (settings.bitrateMode == ExportSettings.BitrateMode.CRF) {
             errors += "CRF bitrate mode is not supported by this Android encoder adapter."
         }

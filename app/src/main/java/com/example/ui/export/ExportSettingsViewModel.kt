@@ -127,9 +127,10 @@ class ExportSettingsViewModel(application: Application) : AndroidViewModel(appli
             enabledVideoClips.all { clip ->
                 project?.mediaAssets?.firstOrNull { it.assetId == clip.mediaId }?.metadata?.hasAudio == true
             }
-        val estimatedBitrate = settings.videoBitrate + if (includesEmbeddedAudio) settings.audioBitrate else 0
+        val estimatedBitrate = settings.videoBitrate.toDouble() +
+            if (includesEmbeddedAudio) settings.audioBitrate.toDouble() else 0.0
         val estimatedSizeMb: Float = if (validationResult.isValid) {
-            (estimatedBitrate.toDouble() * durationSec / (8.0 * 1024.0 * 1024.0)).toFloat()
+            (estimatedBitrate * durationSec / (8.0 * 1024.0 * 1024.0)).toFloat()
         } else {
             0f
         }

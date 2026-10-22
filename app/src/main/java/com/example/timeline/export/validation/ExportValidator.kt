@@ -6,6 +6,7 @@ import android.media.MediaFormat
 import android.net.Uri
 import android.os.Environment
 import com.example.timeline.core.TimelineProject
+import com.example.timeline.core.TrackType
 import com.example.timeline.export.model.ExportSettings
 import com.example.timeline.export.model.ExportCodec
 import com.example.timeline.export.model.ExportContainer
@@ -17,37 +18,39 @@ object ExportValidator {
         val errors = mutableListOf<ExportError>()
 
         // 1. Project has timeline clips
-        val hasClips = project.tracks.any { it.clips.isNotEmpty() }
+        val hasClips = project.tracks.any { track -> track.isVisible && track.clips.any { it.isEnabled } }
         if (!hasClips) {
             errors.add(ExportError(ExportErrorType.MISSING_MEDIA, "Timeline is empty. No clips to export."))
         }
 
         // 2 & 3. Media files exist
-        project.tracks.flatMap { it.clips }.forEach { clip ->
-            val assetId = clip.mediaId
-            val asset = project.mediaAssets.find { it.assetId == assetId }
-            if (asset != null) {
-                // If it's a content URI, we assume it exists unless we try to open it. 
-                // We will check for file scheme or absolute path.
-                val uriString = asset.localOriginalUriString ?: asset.originalUriString
-                val uri = Uri.parse(uriString)
-                val sourceFile = when (uri.scheme?.lowercase()) {
-                    "content" -> null
-                    "file" -> uri.path?.let(::File)
-                    else -> File(uriString)
-                }
-                val sourceAvailable = if (uri.scheme.equals("content", ignoreCase = true)) {
-                    runCatching {
-                        context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { true } ?: false
-                    }.getOrDefault(false)
-                } else {
-                    sourceFile?.isFile == true && sourceFile.canRead()
-                }
-                if (!sourceAvailable) {
-                    errors.add(ExportError(ExportErrorType.MISSING_MEDIA, "Missing or unreadable media file: ${asset.displayName}"))
+        project.tracks
+            .filter { track -> track.isVisible && (track.type != TrackType.AUDIO || !track.isMuted) }
+            .flatMap { track -> track.clips.filter { it.isEnabled } }
+            .forEach { clip ->
+                val asset = project.mediaAssets.find { it.assetId == clip.mediaId }
+                if (asset != null) {
+                    // If it's a content URI, we assume it exists unless we try to open it.
+                    // We will check for file scheme or absolute path.
+                    val uriString = asset.localOriginalUriString?.takeIf { it.isNotBlank() } ?: asset.originalUriString
+                    val uri = Uri.parse(uriString)
+                    val sourceFile = when (uri.scheme?.lowercase()) {
+                        "content" -> null
+                        "file" -> uri.path?.let(::File)
+                        else -> File(uriString)
+                    }
+                    val sourceAvailable = if (uri.scheme.equals("content", ignoreCase = true)) {
+                        runCatching {
+                            context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { true } ?: false
+                        }.getOrDefault(false)
+                    } else {
+                        sourceFile?.isFile == true && sourceFile.canRead()
+                    }
+                    if (!sourceAvailable) {
+                        errors.add(ExportError(ExportErrorType.MISSING_MEDIA, "Missing or unreadable media file: ${asset.displayName}"))
+                    }
                 }
             }
-        }
 
         // 4. Output path writable
         // We will assume that if we can create a temporary file, it's writable
@@ -96,7 +99,8 @@ object ExportValidator {
         } else {
             0.0
         }
-        val estimatedSizeBytes = durationSeconds * (settings.videoBitrate + settings.audioBitrate) / 8.0
+        val estimatedSizeBytes = durationSeconds *
+            (settings.videoBitrate.toDouble() + settings.audioBitrate.toDouble()) / 8.0
         val outputDirectory = context.getExternalFilesDir(Environment.DIRECTORY_MOVIES)
             ?: File(context.filesDir, Environment.DIRECTORY_MOVIES)
         val storageProbe = generateSequence(outputDirectory) { it.parentFile }
