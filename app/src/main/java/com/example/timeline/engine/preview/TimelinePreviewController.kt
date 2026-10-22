@@ -32,6 +32,10 @@ class TimelinePreviewController(private val context: Context) {
     private var activeProject: TimelineProject? = null
     private var lastPlayheadFrame: Long = 0L
     private var preferredEngineType: PreviewEngineType = PreviewEngineType.AUTO
+
+    /** The user's requested engine, which may differ from the automatic MCRAW or grade fallback. */
+    fun engineTypeToRestoreAfterTemporaryPreview(): PreviewEngineType = preferredEngineType
+
     @Volatile private var colorGradeBypassed: Boolean = false
     @Volatile private var configuredPreferProxyPlayback: Boolean = true
     @Volatile private var preferProxyPlayback: Boolean = true
@@ -61,6 +65,7 @@ class TimelinePreviewController(private val context: Context) {
     fun setColorGradingPreviewActive(active: Boolean) {
         if (_colorGradingPreviewActive.value == active) return
         _colorGradingPreviewActive.value = active
+        previewEngine.setColorGradePreviewMode(active)
         applyPreviewSourcePreference()
     }
 
@@ -218,6 +223,7 @@ class TimelinePreviewController(private val context: Context) {
         try {
             val newEngine = createEngine(context, type)
             candidateEngine = newEngine
+            newEngine.setColorGradePreviewMode(_colorGradingPreviewActive.value)
             // Load the active clip before switching the PlayerView to avoid an empty source flash.
             val project = activeProject
             val clip = activeClip.value

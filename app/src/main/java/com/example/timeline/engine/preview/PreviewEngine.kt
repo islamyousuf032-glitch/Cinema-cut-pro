@@ -138,6 +138,9 @@ interface PreviewEngine {
 
     fun setSurface(surface: Surface?)
 
+    /** Keeps the Media3 grade graph attached while the color panel is open, including at neutral settings. */
+    fun setColorGradePreviewMode(enabled: Boolean) = Unit
+
     fun loadMedia(
         uriString: String,
         useProxy: Boolean,

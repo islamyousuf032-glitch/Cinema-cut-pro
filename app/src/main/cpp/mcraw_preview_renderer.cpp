@@ -1,6 +1,7 @@
 #include "mcraw_preview_renderer.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 
@@ -31,15 +32,24 @@ int channelFor(const std::string& pattern, int x, int y) {
     return -1;
 }
 
-double srgbEncode(double linear) {
-    linear = std::clamp(linear, 0.0, 1.0);
-    if (linear <= 0.0031308) return 12.92 * linear;
-    return 1.055 * std::pow(linear, 1.0 / 2.4) - 0.055;
-}
-
-uint8_t toByte(double value) {
-    const double normalized = std::clamp(value, 0.0, 1.0);
-    return static_cast<uint8_t>(std::lround(normalized * 255.0));
+uint8_t toSrgbByte(double linear) {
+    // The same 16-bit lookup table is reused for every output frame. It replaces three pow()
+    // calls per preview pixel with table reads; 16-bit indexing keeps quantization well below
+    // one 8-bit output code value.
+    static const std::array<uint8_t, 65'536> encodeTable = [] {
+        std::array<uint8_t, 65'536> table{};
+        for (size_t index = 0; index < table.size(); ++index) {
+            const double value = static_cast<double>(index) / 65'535.0;
+            const double encoded = value <= 0.0031308
+                ? 12.92 * value
+                : 1.055 * std::pow(value, 1.0 / 2.4) - 0.055;
+            table[index] = static_cast<uint8_t>(std::lround(encoded * 255.0));
+        }
+        return table;
+    }();
+    const double normalized = std::clamp(linear, 0.0, 1.0);
+    const size_t index = static_cast<size_t>(std::lround(normalized * 65'535.0));
+    return encodeTable[index];
 }
 
 }  // namespace
@@ -91,25 +101,40 @@ bool renderBayerPreview(
         return std::clamp((static_cast<double>(raw[pixelIndex]) - black) / range, 0.0, 1.0);
     };
 
-    auto interpolateChannel = [&](const int x, const int y, const int wantedChannel) {
-        if (channelFor(metadata.cfaPattern, x, y) == wantedChannel) {
-            return normalizedRaw(x, y);
+    auto interpolateChannels = [&](const int x, const int y) {
+        std::array<double, 3> channels{{0.0, 0.0, 0.0}};
+        std::array<double, 3> weightedSums{{0.0, 0.0, 0.0}};
+        std::array<double, 3> weightTotals{{0.0, 0.0, 0.0}};
+        std::array<bool, 3> hasCenterSample{{false, false, false}};
+        const double centerValue = normalizedRaw(x, y);
+        const int centerChannel = channelFor(metadata.cfaPattern, x, y);
+        if (centerChannel >= 0) {
+            channels[static_cast<size_t>(centerChannel)] = centerValue;
+            hasCenterSample[static_cast<size_t>(centerChannel)] = true;
         }
-        double weightedSum = 0.0;
-        double weightTotal = 0.0;
+
+        // Visit the 3x3 Bayer neighborhood once for all three channels. The previous code
+        // repeated this walk and raw normalization independently for R, G, and B.
         for (int dy = -1; dy <= 1; ++dy) {
             for (int dx = -1; dx <= 1; ++dx) {
                 if (dx == 0 && dy == 0) continue;
                 const int nx = std::clamp(x + dx, 0, sourceWidth - 1);
                 const int ny = std::clamp(y + dy, 0, sourceHeight - 1);
-                if (channelFor(metadata.cfaPattern, nx, ny) != wantedChannel) continue;
+                const int channel = channelFor(metadata.cfaPattern, nx, ny);
+                if (channel < 0 || hasCenterSample[static_cast<size_t>(channel)]) continue;
                 const double weight = 1.0 / static_cast<double>(dx * dx + dy * dy);
-                weightedSum += normalizedRaw(nx, ny) * weight;
-                weightTotal += weight;
+                weightedSums[static_cast<size_t>(channel)] += normalizedRaw(nx, ny) * weight;
+                weightTotals[static_cast<size_t>(channel)] += weight;
             }
         }
-        if (weightTotal > 0.0) return weightedSum / weightTotal;
-        return normalizedRaw(x, y);
+
+        for (size_t channel = 0; channel < channels.size(); ++channel) {
+            if (hasCenterSample[channel]) continue;
+            channels[channel] = weightTotals[channel] > 0.0
+                ? weightedSums[channel] / weightTotals[channel]
+                : centerValue;
+        }
+        return channels;
     };
 
     auto applyForwardMatrix = [&](double& red, double& green, double& blue) {
@@ -147,14 +172,15 @@ bool renderBayerPreview(
         for (int x = 0; x < outputWidth; ++x) {
             const int sourceX = std::min(sourceWidth - 1,
                 static_cast<int>((static_cast<int64_t>(2 * x + 1) * sourceWidth) / (2 * outputWidth)));
-            double red = interpolateChannel(sourceX, sourceY, 0) * metadata.whiteBalanceGain[0];
-            double green = interpolateChannel(sourceX, sourceY, 1) * metadata.whiteBalanceGain[1];
-            double blue = interpolateChannel(sourceX, sourceY, 2) * metadata.whiteBalanceGain[2];
+            const auto camera = interpolateChannels(sourceX, sourceY);
+            double red = camera[0] * metadata.whiteBalanceGain[0];
+            double green = camera[1] * metadata.whiteBalanceGain[1];
+            double blue = camera[2] * metadata.whiteBalanceGain[2];
             applyForwardMatrix(red, green, blue);
             const uint32_t pixel = 0xff000000u |
-                (static_cast<uint32_t>(toByte(srgbEncode(red))) << 16u) |
-                (static_cast<uint32_t>(toByte(srgbEncode(green))) << 8u) |
-                static_cast<uint32_t>(toByte(srgbEncode(blue)));
+                (static_cast<uint32_t>(toSrgbByte(red)) << 16u) |
+                (static_cast<uint32_t>(toSrgbByte(green)) << 8u) |
+                static_cast<uint32_t>(toSrgbByte(blue));
             output.pixels[static_cast<size_t>(y) * static_cast<size_t>(outputWidth) + static_cast<size_t>(x)] = pixel;
         }
     }

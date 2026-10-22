@@ -68,6 +68,8 @@ class Media3FallbackPreviewEngine(context: Context) : PreviewEngine {
     private var currentUri: String? = null
     private var currentMimeType: String? = null
     private var videoEffectsActive = false
+    private var colorGradePreviewMode = false
+    private var latestEvaluatedParams: VideoAdjustmentParams = VideoAdjustmentParams.default()
     private var effectFailureFallbackSource: String? = null
     private val released = AtomicBoolean(false)
 
@@ -214,7 +216,8 @@ class Media3FallbackPreviewEngine(context: Context) : PreviewEngine {
     private fun updateVideoEffects(uriString: String, mimeType: String?, params: VideoAdjustmentParams?) {
         val currentParams = params ?: VideoAdjustmentParams.default()
         effectGraph.setParams(currentParams)
-        val shouldActivate = currentParams.hasActivePreviewEffect() && effectFailureFallbackSource != uriString
+        val shouldActivate = (colorGradePreviewMode || currentParams.hasActivePreviewEffect()) &&
+            effectFailureFallbackSource != uriString
         if (shouldActivate == videoEffectsActive) return
 
         try {
@@ -390,6 +393,25 @@ class Media3FallbackPreviewEngine(context: Context) : PreviewEngine {
         if (!released.get()) exoPlayer.setVideoSurface(surface)
     }
 
+    override fun setColorGradePreviewMode(enabled: Boolean) {
+        if (released.get() || colorGradePreviewMode == enabled) return
+        colorGradePreviewMode = enabled
+        val uri = currentUri ?: return
+        val wasActive = videoEffectsActive
+        updateVideoEffects(uri, currentMimeType, latestEvaluatedParams)
+        if (!wasActive && videoEffectsActive && !exoPlayer.isPlaying &&
+            exoPlayer.playbackState == Player.STATE_READY
+        ) {
+            // Changing the effect list while paused does not reliably redraw the held decoder
+            // frame on every Media3/device combination. A same-position seek forces one frame
+            // through the now-attached graph; later slider changes use the existing REDRAW path.
+            cancelPausedGradeRefresh()
+            val positionMs = exoPlayer.currentPosition.coerceAtLeast(0L)
+            exoPlayer.seekTo(positionMs)
+            lastPausedGradeRefreshMs = android.os.SystemClock.elapsedRealtime()
+        }
+    }
+
     override fun loadMedia(
         uriString: String,
         useProxy: Boolean,
@@ -401,6 +423,7 @@ class Media3FallbackPreviewEngine(context: Context) : PreviewEngine {
     ) {
         if (released.get()) return
         val safePositionMs = sourcePositionMs.coerceAtLeast(0L)
+        latestEvaluatedParams = evaluatedParams ?: VideoAdjustmentParams.default()
         val normalizedMimeType = mimeType?.substringBefore(';')?.trim()?.takeIf(String::isNotBlank)
         if (com.example.BuildConfig.DEBUG) {
             android.util.Log.d("PLAYER_MEDIA3", "Loading ${normalizedMimeType ?: "unknown media"} at $safePositionMs ms; proxy=$useProxy")
@@ -409,8 +432,9 @@ class Media3FallbackPreviewEngine(context: Context) : PreviewEngine {
         if (currentUri != uriString) effectFailureFallbackSource = null
         val sameSource = currentUri == uriString && currentMimeType == normalizedMimeType
         if (sameSource && exoPlayer.playerError == null) {
-            // Keep the graph detached when no grade is active; attach it only when GPU work is needed.
-            updateVideoEffects(uriString, normalizedMimeType, evaluatedParams)
+            // Keep the graph detached outside the color panel when no grade is active. While the
+            // panel is open, keep it attached so paused-frame slider updates only change uniforms.
+            updateVideoEffects(uriString, normalizedMimeType, latestEvaluatedParams)
             val isPlaying = exoPlayer.isPlaying
             val positionDeltaMs = kotlin.math.abs(exoPlayer.currentPosition - safePositionMs)
             // Project/grade state can change many times per second while playing. Only seek for
@@ -445,7 +469,7 @@ class Media3FallbackPreviewEngine(context: Context) : PreviewEngine {
         _firstFrameRendered.value = false
         _state.update { it.copy(error = null, usingProxy = useProxy, isReady = false) }
         // The GlEffect reads these values on Media3's GL thread; non-default grades opt into it.
-        updateVideoEffects(uriString, normalizedMimeType, evaluatedParams)
+        updateVideoEffects(uriString, normalizedMimeType, latestEvaluatedParams)
 
         try {
             val mediaItemBuilder = MediaItem.Builder().setUri(Uri.parse(uriString))

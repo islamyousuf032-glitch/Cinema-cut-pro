@@ -108,9 +108,14 @@ fun ProfessionalColorGradingScreen(
     } == true
 
     val engineType by previewController.engineTypeFlow.collectAsState()
-    val engineToRestore = remember(previewController) { previewController.engineTypeFlow.value }
-    val needsMedia3ForLiveGrade = remember(previewController, engineType, isMotionCamRaw) {
-        !isMotionCamRaw && !previewController.previewEngine.capabilities.canApplyRealtimeColorGrade
+    // Capture the user's requested engine before the temporary Media3 handoff. Looking at the
+    // current engine here causes needsMedia3ForLiveGrade to turn false as soon as that handoff
+    // succeeds, disposing the effect and switching back to the engine that cannot show the grade.
+    val engineToRestore = remember(previewController) {
+        previewController.engineTypeToRestoreAfterTemporaryPreview()
+    }
+    val needsMedia3ForLiveGrade = remember(engineToRestore, isMotionCamRaw) {
+        com.example.timeline.engine.preview.requiresMedia3ForLiveGrade(engineToRestore, isMotionCamRaw)
     }
     val latestIsPlaying by rememberUpdatedState(isPlaying)
     DisposableEffect(previewController, engineToRestore, needsMedia3ForLiveGrade) {
@@ -264,16 +269,23 @@ Box(
                     }
                 }
                 1 -> {
-                    // Curves
-                    CurvesPanel(
-                        curveParams = currentGrade.curves,
-                        onParamsChange = { newCurves ->
-                            val newGrade = currentGrade.copy(curves = newCurves)
-                            colorViewModel.updateColorGradeLive(newGrade, activeColorLayerId)
-                        },
-                        onDragStart = { colorViewModel.beginAdjustmentDrag() },
-                        onDragEnd = { colorViewModel.endAdjustmentDrag("Curves") }
-                    )
+                    // Curves are persisted but aren't yet connected to the live preview or export renderer.
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text(
+                            text = "Curve controls are saved to the grade, but curve rendering is not yet implemented in live preview or MP4 export.",
+                            color = MaterialTheme.colorScheme.tertiary,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        CurvesPanel(
+                            curveParams = currentGrade.curves,
+                            onParamsChange = { newCurves ->
+                                val newGrade = currentGrade.copy(curves = newCurves)
+                                colorViewModel.updateColorGradeLive(newGrade, activeColorLayerId)
+                            },
+                            onDragStart = { colorViewModel.beginAdjustmentDrag() },
+                            onDragEnd = { colorViewModel.endAdjustmentDrag("Curves") }
+                        )
+                    }
                 }
                 2 -> {
                     // HSL
