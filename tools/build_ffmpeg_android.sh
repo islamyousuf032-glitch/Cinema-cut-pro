@@ -97,13 +97,11 @@ if [[ ! -x "${CC}" || ! -x "${CXX}" ]]; then
   exit 2
 fi
 
-# Only directories carrying our marker (or a recognized legacy Gradle-cache layout under the
-# app build directory) are cleaned; never remove unrelated caller-supplied output directories.
+# The build and install-prefix directories are cleaned only when marked (or recognized as a
+# Gradle-cached layout under the default app build path). JNI/assets output trees are preserved;
+# the script overwrites only its known library and notice files there.
 readonly GENERATED_MARKER=".cinema-cut-pro-ffmpeg-generated"
-is_empty_directory() {
-  [[ -d "$1" ]] && [[ -z "$(find "$1" -mindepth 1 -maxdepth 1 -print -quit)" ]]
-}
-for generated_dir in "${BUILD_DIR}" "${PREFIX}" "${JNI_LIBS_ROOT}" "${ASSETS_ROOT}"; do
+for generated_dir in "${BUILD_DIR}" "${PREFIX}"; do
   if [[ -e "${generated_dir}" && ! -f "${generated_dir}/${GENERATED_MARKER}" ]]; then
     # Gradle can restore declared task outputs from its build cache without files that were not
     # declared as outputs. Accept only the exact legacy cache layout under this app build dir.
@@ -112,7 +110,7 @@ for generated_dir in "${BUILD_DIR}" "${PREFIX}" "${JNI_LIBS_ROOT}" "${ASSETS_ROO
       case "${generated_dir}" in
         "${BUILD_DIR}")
           # This private build tree is disposable by design. It is not a source path, and Gradle
-          # may materialize its output directory before the Exec task (or restore partial cache data).
+          # may materialize its output directory before the Exec task or restore partial cache data.
           known_gradle_cache_output=true
           ;;
         "${PREFIX}")
@@ -120,20 +118,6 @@ for generated_dir in "${BUILD_DIR}" "${PREFIX}" "${JNI_LIBS_ROOT}" "${ASSETS_ROO
           # is safe to clear when every top-level entry is one of our generated prefix paths.
           if ! find "${PREFIX}" -mindepth 1 -maxdepth 1 \
             ! -name include ! -name lib ! -name FFMPEG_BUILD_INFO.txt -print -quit | grep -q .; then
-            known_gradle_cache_output=true
-          fi
-          ;;
-        "${JNI_LIBS_ROOT}")
-          if is_empty_directory "${JNI_LIBS_ROOT}" || \
-            { [[ -d "${JNI_LIBS_DIR}" ]] && \
-              ! find "${JNI_LIBS_ROOT}" -mindepth 1 -maxdepth 1 ! -name arm64-v8a -print -quit | grep -q .; }; then
-            known_gradle_cache_output=true
-          fi
-          ;;
-        "${ASSETS_ROOT}")
-          if is_empty_directory "${ASSETS_ROOT}" || \
-            { [[ -d "${ASSETS_DIR}" ]] && \
-              ! find "${ASSETS_ROOT}" -mindepth 1 -maxdepth 1 ! -name ffmpeg -print -quit | grep -q .; }; then
             known_gradle_cache_output=true
           fi
           ;;
@@ -146,10 +130,11 @@ for generated_dir in "${BUILD_DIR}" "${PREFIX}" "${JNI_LIBS_ROOT}" "${ASSETS_ROO
     echo "Cleaning a known Gradle-cached FFmpeg output directory: ${generated_dir}."
   fi
 done
-rm -rf "${BUILD_DIR}" "${PREFIX}" "${JNI_LIBS_ROOT}" "${ASSETS_ROOT}"
+rm -rf "${BUILD_DIR}" "${PREFIX}"
 mkdir -p "${BUILD_DIR}" "${PREFIX}" "${JNI_LIBS_DIR}" "${ASSETS_DIR}"
 touch "${BUILD_DIR}/${GENERATED_MARKER}" "${PREFIX}/${GENERATED_MARKER}"
-touch "${JNI_LIBS_ROOT}/${GENERATED_MARKER}" "${ASSETS_ROOT}/${GENERATED_MARKER}"
+# Remove markers created by older script revisions so they cannot be packaged as assets.
+rm -f "${JNI_LIBS_ROOT}/${GENERATED_MARKER}" "${ASSETS_ROOT}/${GENERATED_MARKER}"
 cd "${BUILD_DIR}"
 
 "${SOURCE_DIR}/configure" \

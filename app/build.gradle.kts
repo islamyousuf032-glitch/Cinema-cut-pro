@@ -9,7 +9,7 @@ plugins {
 
 val ffmpegBuildRoot = layout.buildDirectory.dir("ffmpeg-android").get().asFile
 val ffmpegGeneratedMarker = ".cinema-cut-pro-ffmpeg-generated"
-val ffmpegGeneratedOutputMarkers = listOf("build", "prefix", "jniLibs", "assets")
+val ffmpegGeneratedOutputMarkers = listOf("build", "prefix")
   .map { directory -> ffmpegBuildRoot.resolve("$directory/$ffmpegGeneratedMarker") }
 val ffmpegLibraries = listOf("avutil", "avcodec", "avformat", "swscale", "swresample")
 val ffmpegBuildOutputs = ffmpegLibraries.flatMap { library ->
