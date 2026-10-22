@@ -1,39 +1,38 @@
-# Media3 preview and bounded export
+# Playback, live grading, and bounded export
 
-**Integration status:** the Android debug build, JVM tests, and native host tests passed in [GitHub Actions run 39122394286](https://github.com/islamyousuf032-glitch/Cinema-cut-pro/actions/runs/39122394286). Representative media playback/export and Logcat validation on target Android devices remain outstanding. This document describes implemented source scope and known limits; it is not a compatibility guarantee.
+**Verification status:** the latest CI-verified Android debug build is commit `71487b0` (workflow [39621221519](https://github.com/islamyousuf032-glitch/Cinema-cut-pro/actions/runs/39621221519)). The current working-tree changes have not yet had an Android/Kotlin build or device test. The native host suite was rerun for this working tree and passed. None of this is a device-compatibility guarantee.
 
-## Playback route
+## Playback routes
 
-- `PreviewEngineType.AUTO` resolves to Media3 ExoPlayer. Media3 is the default for ordinary Android media; the timeline, project model, orientation, and existing editor/timeline UI remain in place.
-- The old `FFMPEG_NATIVE` preference name is retained for saved-setting compatibility. Its implementation is the app's existing **LibVLC 3.5.1 Java API**, not a standalone native C++ FFmpeg decoder. `VLC_NATIVE` is also retained. These are explicit/manual fallback selections; an automatic Media3 failure does not silently load LibVLC.
-- `PreviewMediaSource` carries the URI, MIME type, and proxy selection without depending on Compose. The timeline passes asset MIME (or proxy MIME) to Media3, which is especially useful when a Storage Access Framework URI has no useful filename extension.
-- ExoPlayer receives SAF `content://` URIs through Android's content data source and the app already attempts to persist read permission at import. The importer also copies media into app-scoped storage when possible. This path still needs testing with providers that deny persistent grants, cloud-backed documents, and relinked assets.
-- The foundation exposes load/source, play, pause, seek, positive playback speed, normalized volume, state, first-frame, error, and release controls. The timeline applies each active clip's volume. Player objects use the application context, enable audio-focus handling/noisy-route pause behavior, and are released with their Compose owner.
+- `PreviewEngineType.AUTO` resolves to Media3 ExoPlayer. The existing ExoPlayer and LibVLC routes remain available; timeline, project model, orientation, and editor/timeline UI are unchanged.
+- The old `FFMPEG_NATIVE` preference name is retained for saved-setting compatibility. Its implementation is the app's existing **LibVLC 3.5.1 Java API**, not a standalone native C++ FFmpeg decoder. `VLC_NATIVE` is also retained. Standalone FFmpeg playback has **not** been integrated yet; it needs a reproducible Android build, minimum-SDK/ABI coverage, a real demux/decode/audio-sync/Surface path, and a licensing/provenance review. Do not label the legacy setting as FFmpeg support.
+- `PreviewMediaSource` carries URI, MIME type, and proxy selection without depending on Compose. MIME hints help with SAF URIs that have no useful filename extension. SAF grant persistence, cloud-backed providers, and relinked assets still need device testing.
+- Media3 reports engine/state, first-frame and failure information plus playback metrics. Debug-only logs avoid release logging. Diagnostics are not a substitute for inspecting the actual source and device log.
 
-### Format support is device-dependent
+### MotionCam RAW (`.mcraw`)
 
-Media3 delegates demuxing and decoding to its configured extractors and the Android platform's available codecs. A container or codec that works on one Android version/device may fail on another, and a MIME hint cannot add a missing decoder. Do not describe this as support for “all formats.” In particular, `.mcraw` is not supported and no MCRAW decoder was added.
+The app has a native MotionCam decoder and RAW Bayer preview path. It is routed to the native preview automatically for MCRAW assets and supports live primary grading in the current RAW preview. Playback still decompresses full RAW frames before producing a reduced preview; the playing preview is capped at a 480-pixel long edge, and the Bayer renderer uses a shared sRGB lookup table and a single neighborhood walk per output pixel. This is an optimization, **not** a smooth-playback guarantee. A short device-captured sample and on-device frame-timing tests are still needed. The bounded H.264/MP4 export backend rejects `.mcraw` before rendering.
 
-For a real compatibility claim, record exact source details (container, video/audio codec and profile, bit depth, frame rate, HDR/rotation), Android version, device/model, and the Media3 error. The in-app debug panel reports engine/state, first frame, URI scheme/authority (not the private path), source MIME, Media3 error category/code name and cause, decoder initialization, dropped frames, and frame-processing metrics. Logcat or `adb logcat` should be captured alongside the sample; debug diagnostics are not a substitute for a device test.
+The grading screen identifies the RAW preview's supported controls (exposure, temperature/tint, primary Lift/Gamma/Gain/Offset, three-zone balance, brightness, contrast, and saturation). Curves, HSL, LUTs, and other advanced RAW grading are not reflected yet.
 
-## Export proof of concept and limits
+### Ordinary video and live grading
 
-The repository already contains a cancellable Media3 Transformer path. It is deliberately bounded and validates before rendering. Current validation allows a narrow sequential/cut-only composition: one enabled visible video track, regular video clips with compatible constant frame rates, contiguous timeline positions, valid source-frame trims, H.264 in MP4, 8-bit Rec.709 SDR, and compatible embedded mono/stereo AAC when present. The adapter uses platform encoder selection, reports progress, responds to cancellation, removes incomplete staging output, and copies a completed file to the chosen destination through the existing export workflow. Some basic clip adjustments are supported; unsupported adjustment stacks are rejected rather than silently dropped.
+Media3 uses Android's installed extractors/decoders; support depends on device and OS. A MIME hint cannot add a missing decoder, and a 4K/10-bit label alone does not establish codec, profile, transfer function, or failure cause. The reported 4K 10-bit HLG playback problem remains undiagnosed without the exact stream metadata, sample, and logs.
 
-It is **not** a professional NLE renderer. It does not composite multiple video layers, add independent audio tracks/mixes, render clip transforms/keyframes, apply the complete color/LUT/HDR graph, watermark, or produce alpha. VFR inputs, unsupported rates/codecs, and other mismatches are rejected. Multiple accepted clips are rendered sequentially as cuts. There is no transition model/render path here: overlaps, crossfades/dissolves, and other timeline transitions are unsupported. Media3 Transformer alone does not provide the app's missing NLE transition semantics.
+When the grading screen is open for ordinary video, its current route keeps the Media3 GPU graph attached so slider changes can update shader parameters without rebuilding the graph for every change. A paused player seeks to the held position on first graph attachment and throttles subsequent redraw requests. Other requested engines are temporarily routed through Media3 for this preview; ExoPlayer and LibVLC are not removed. Device testing is still required because Media3 effect attachment/redraw behavior can vary by renderer/device. Curve controls are explicitly marked as not yet connected to the live preview or MP4 export. The MotionCam limitations are listed separately above.
 
-The export-oriented “Fix automatically” operation can shift clips to compact a sole visible video track. Review the resulting timeline before export; do not use it to imply that an intentional overlap/crossfade was rendered.
+## Bounded Media3 export
+
+The only real video export backend currently registered is Media3 Transformer using the Android platform encoder. The export UI is being narrowed to the implemented path: H.264 in MP4, Rec.709 8-bit SDR, AAC, source-matched constant frame rate, and selected target bitrate/bitrate mode. Advertised controls for other codecs/containers, HDR, alpha, watermarking, proxy output, and audio normalization are removed or described as unavailable rather than treated as working features.
+
+Before rendering, validation checks the selected H.264 encoder's dimensions, frame rate, target bitrate, and bitrate mode, and checks AAC sample rate, channel count, and bitrate when audio is included. It also rejects unsupported source formats/settings, including MCRAW, HDR/log/>8-bit input, VFR or unverified cadence, incompatible source rates, multiple active video tracks, audio mixes/separate audio clips, overlays, transforms, overlaps, transitions, unsupported grades, and invalid trims. Encoder capability queries are device-dependent; passing them is not proof that a complete export will succeed on every device.
+
+The supported composition is one enabled visible video track with regular video clips, contiguous cut-only edits and compatible CFR sources; accepted clips are rendered sequentially. Embedded mono/stereo AAC is only passed through when the source clips have a compatible format. The path does not perform frame-rate conversion, sample-rate conversion, multi-track compositing, full color/LUT processing, or transition rendering. Unsupported edits must be rejected, not silently dropped.
+
+“Fix automatically” can compact a sole visible video track. Review the timeline before export; this must not be presented as rendering an intentional gap, overlap, or transition.
 
 ## Validation still required
 
-The upload kit contained neither a sample video nor a Logcat capture, and this sandbox has no attached Android device. Consequently, the original playback failure has not been diagnosed, and playback/export have not been validated on target devices. Do not infer a device-specific cause from source inspection alone.
+No target-device validation of the current working-tree changes has been performed. For the unresolved ordinary-video playback report, do not infer the cause: collect the original sample (or a short unmodified clip), exact container/video/audio codec and profile, bit depth, frame rate, HDR transfer/primaries, rotation, Android/device details, and Media3/LibVLC logs.
 
-For validation, use user-provided/licensed fixtures and capture both the file and Logcat. At minimum, test:
-
-1. A known-good H.264/AAC MP4 from local storage and the same file through a SAF `content://` URI.
-2. A representative target-device camera clip (including its actual codec/profile, frame rate, rotation, bit depth, and audio details).
-3. One media type that previously failed, without relabeling or transcoding it before the diagnostic run.
-4. Timeline loading, first frame while paused, play/pause, frame seek, speed, per-clip volume, clip boundary handoff, background/noisy-audio behavior, and returning from a document provider.
-5. A supported short trim export, output playback/metadata inspection, cancellation during encoding, and a project rejected for unsupported overlap/crossfade or track composition.
-
-Record device/OS, sample checksums, source metadata, Media3 error code/cause, and export output metadata. This checklist is future validation work, not a report that those tests have passed.
+For playback and export, test SAF and app-local media, representative camera/MCRAW footage, paused first-frame and grade updates, play/pause/seek/speed/audio and clip-boundary handoff, short accepted trims, output metadata and playback, unsupported-setting rejection, cancellation, and incomplete-file cleanup. Record device/OS, sample checksums, source/output metadata, frame/drop metrics, and error codes. These are future tests, not claims that they have passed.
