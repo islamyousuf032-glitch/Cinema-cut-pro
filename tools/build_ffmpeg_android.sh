@@ -21,12 +21,15 @@ if [[ "${API_LEVEL}" != "${DEFAULT_API_LEVEL}" ]]; then
   exit 2
 fi
 
-NDK_ROOT="${ANDROID_NDK_ROOT:-${ANDROID_NDK_HOME:-}}"
-if [[ -z "${NDK_ROOT}" && -n "${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}" ]]; then
-  SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME}}"
-  if [[ -d "${SDK_ROOT}/ndk/${NDK_VERSION}" ]]; then
-    NDK_ROOT="${SDK_ROOT}/ndk/${NDK_VERSION}"
-  fi
+NDK_ROOT="${ANDROID_NDK_ROOT:-}"
+SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+if [[ -z "${NDK_ROOT}" && -n "${SDK_ROOT}" && -d "${SDK_ROOT}/ndk/${NDK_VERSION}" ]]; then
+  # Prefer the explicitly pinned SDK installation over setup-android's default NDK alias,
+  # which may point at a different side-by-side version.
+  NDK_ROOT="${SDK_ROOT}/ndk/${NDK_VERSION}"
+fi
+if [[ -z "${NDK_ROOT}" ]]; then
+  NDK_ROOT="${ANDROID_NDK_HOME:-}"
 fi
 if [[ -z "${NDK_ROOT}" || ! -d "${NDK_ROOT}/toolchains/llvm/prebuilt" ]]; then
   echo "Set ANDROID_NDK_ROOT/ANDROID_NDK_HOME or install NDK ${NDK_VERSION} under ANDROID_SDK_ROOT." >&2
