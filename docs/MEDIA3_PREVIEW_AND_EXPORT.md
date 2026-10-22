@@ -1,6 +1,6 @@
 # Playback, live grading, and bounded export
 
-**Current verification:** the C++ host suite passes, including the Bayer preview renderer and upstream MotionCam decoder tests. Android compilation and JVM tests for the current FFmpeg/Gradle integration are still pending CI. After the Gradle-cache cleanup was corrected, CI reached the Android native build and exposed two FFmpeg JNI compile errors (a mutex read from a const preview and a const MediaCodec buffer passed to FFmpeg); both have been fixed on this branch and need a green rerun. This sandbox has no Android SDK/NDK or Java runtime. No test APK has been generated or shared, and no physical-device test has been performed; the user will do device testing.
+**Current verification:** GitHub Actions run `39800198201` passed Android Kotlin/native CMake compilation, JVM tests, the C++ host suite (including the Bayer preview renderer and upstream MotionCam decoder tests), and FFmpeg build-script syntax on commit `dbb3357`. Its normal push path skipped APK assembly. A separately gated test-release run will build and verify a debug APK only after the explicit `[publish-test-release]` milestone; no APK has been generated or shared yet. This sandbox has no Android SDK/NDK or Java runtime. No physical-device test has been performed; the user will do device testing.
 
 ## Playback routes
 
