@@ -417,21 +417,9 @@ class TimelinePreviewController(private val context: Context) {
                     val next = low
                     val previous = (next - 1).coerceAtLeast(0)
                     val selected = if (kotlin.math.abs(targetNs - timestamps[previous]) <= kotlin.math.abs(timestamps[next] - targetNs)) previous else next
-                    val decoded = com.example.timeline.media.NativeMcrawDecoder.decodeFrame(handle, selected, 960)
-                    val rotation = runCatching {
-                        org.json.JSONObject(com.example.timeline.media.NativeMcrawDecoder.frameMetadataJson(handle, selected))
-                            .optInt("rotationDegrees", 0)
-                            .let { ((it % 360) + 360) % 360 }
-                    }.getOrDefault(0)
-                    if (rotation == 0) decoded else android.graphics.Bitmap.createBitmap(
-                        decoded,
-                        0,
-                        0,
-                        decoded.width,
-                        decoded.height,
-                        android.graphics.Matrix().apply { postRotate(rotation.toFloat()) },
-                        true
-                    )
+                    // The native RAW renderer already applies the MotionCam frame rotation.
+                    // Rotating this extracted bitmap again would double-rotate scope/current-frame output.
+                    com.example.timeline.media.NativeMcrawDecoder.decodeFrame(handle, selected, 960)
                 } catch (_: Exception) {
                     null
                 } finally {

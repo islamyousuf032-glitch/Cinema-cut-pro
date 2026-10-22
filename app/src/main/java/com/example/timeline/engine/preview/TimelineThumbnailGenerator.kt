@@ -2,10 +2,8 @@ package com.example.timeline.engine.preview
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.Matrix
 import android.media.MediaMetadataRetriever
 import android.net.Uri
-import org.json.JSONObject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
@@ -94,21 +92,8 @@ object TimelineThumbnailGenerator {
                         val previous = (next - 1).coerceAtLeast(0)
                         val selected = if (kotlin.math.abs(targetNs - timestamps[previous]) <= kotlin.math.abs(timestamps[next] - targetNs)) previous else next
                         val edge = maxOf(targetWidth, targetHeight, 64)
-                        val nativeBitmap = com.example.timeline.media.NativeMcrawDecoder.decodeFrame(mcrawHandle, selected, edge)
-                        val rotation = runCatching {
-                            JSONObject(com.example.timeline.media.NativeMcrawDecoder.frameMetadataJson(mcrawHandle, selected))
-                                .optInt("rotationDegrees", 0)
-                                .let { ((it % 360) + 360) % 360 }
-                        }.getOrDefault(0)
-                        val decoded = if (rotation == 0) nativeBitmap else Bitmap.createBitmap(
-                            nativeBitmap,
-                            0,
-                            0,
-                            nativeBitmap.width,
-                            nativeBitmap.height,
-                            Matrix().apply { postRotate(rotation.toFloat()) },
-                            true
-                        )
+                        // Native RAW rendering already applies the MotionCam frame rotation.
+                        val decoded = com.example.timeline.media.NativeMcrawDecoder.decodeFrame(mcrawHandle, selected, edge)
                         val aspectRatio = decoded.width.toFloat() / decoded.height.toFloat().coerceAtLeast(1f)
                         val width: Int
                         val height: Int
