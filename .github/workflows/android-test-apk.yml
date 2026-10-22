@@ -131,12 +131,30 @@ jobs:
       - name: Check FFmpeg build script syntax
         run: bash -n tools/build_ffmpeg_android.sh
 
-      - name: Build APK for explicitly approved test release
-        if: github.event_name == 'workflow_dispatch' && inputs.publish_test_release == true
+      - name: Build APK for approved test release
+        if: ${{ (github.event_name == 'workflow_dispatch' && inputs.publish_test_release == true) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[publish-test-release]')) }}
         run: ./gradlew --no-daemon --stacktrace :app:assembleDebug
 
+      - name: Verify bundled third-party license assets in the APK
+        if: ${{ (github.event_name == 'workflow_dispatch' && inputs.publish_test_release == true) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[publish-test-release]')) }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk="app/build/outputs/apk/debug/app-debug.apk"
+          packaged_assets="$(unzip -Z1 "$apk")"
+          for expected in \
+            assets/third_party/motioncam/LICENSE \
+            assets/third_party/motioncam/THIRD_PARTY_NOTICES.md \
+            assets/ffmpeg/COPYING.LGPLv2.1 \
+            assets/ffmpeg/FFMPEG_BUILD_INFO.txt; do
+            if ! grep -Fqx "$expected" <<<"$packaged_assets"; then
+              echo "Required third-party notice is missing from the APK: $expected" >&2
+              exit 1
+            fi
+          done
+
       - name: Prepare APK and checksum
-        if: github.event_name == 'workflow_dispatch' && inputs.publish_test_release == true
+        if: ${{ (github.event_name == 'workflow_dispatch' && inputs.publish_test_release == true) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[publish-test-release]')) }}
         id: apk
         shell: bash
         run: |
@@ -149,7 +167,7 @@ jobs:
           echo "tag=android-test-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
 
       - name: Save APK as a workflow artifact
-        if: github.event_name == 'workflow_dispatch' && inputs.publish_test_release == true
+        if: ${{ (github.event_name == 'workflow_dispatch' && inputs.publish_test_release == true) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[publish-test-release]')) }}
         uses: actions/upload-artifact@v7.0.2
         with:
           name: cinema-cut-pro-test-apk-${{ github.run_number }}-${{ github.run_attempt }}
@@ -160,7 +178,7 @@ jobs:
           retention-days: 30
 
       - name: Publish test APK in GitHub Releases
-        if: github.event_name == 'workflow_dispatch' && inputs.publish_test_release == true
+        if: ${{ (github.event_name == 'workflow_dispatch' && inputs.publish_test_release == true) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[publish-test-release]')) }}
         env:
           GH_TOKEN: ${{ github.token }}
           APK_NAME: ${{ steps.apk.outputs.name }}
