@@ -11,6 +11,11 @@ on:
         required: false
         default: false
         type: boolean
+      verify_ffmpeg_source_build:
+        description: Build pinned FFmpeg LGPL sources for Android (verification only; publishes no artifact)
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -127,6 +132,10 @@ jobs:
 
       - name: Check optional FFmpeg build script syntax
         run: bash -n tools/build_ffmpeg_android.sh
+
+      - name: Build pinned FFmpeg Android sources (manual verification only)
+        if: github.event_name == 'workflow_dispatch' && inputs.verify_ffmpeg_source_build == true
+        run: tools/build_ffmpeg_android.sh
 
       - name: Prepare APK and checksum
         if: github.event_name == 'workflow_dispatch' && inputs.publish_test_release == true
