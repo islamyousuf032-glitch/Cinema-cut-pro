@@ -125,6 +125,9 @@ jobs:
       - name: Run native C++ host tests
         run: python3 tools/run_native_export_tests.py
 
+      - name: Check optional FFmpeg build script syntax
+        run: bash -n tools/build_ffmpeg_android.sh
+
       - name: Prepare APK and checksum
         if: github.event_name == 'workflow_dispatch' && inputs.publish_test_release == true
         id: apk
