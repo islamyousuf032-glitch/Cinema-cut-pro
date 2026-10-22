@@ -131,6 +131,47 @@ jobs:
       - name: Check FFmpeg build script syntax
         run: bash -n tools/build_ffmpeg_android.sh
 
+      - name: Validate FFmpeg Gradle outputs on a second invocation
+        id: ffmpeg_outputs
+        shell: bash
+        run: |
+          set -o pipefail
+          ./gradlew --no-daemon --stacktrace :app:buildFfmpegAndroid 2>&1 | tee ffmpeg-gradle-validation.log
+
+      - name: Surface FFmpeg Gradle output validation failure
+        if: ${{ failure() && steps.ffmpeg_outputs.outcome == 'failure' }}
+        shell: bash
+        run: |
+          python3 - <<'PYTHON'
+          import os
+          from pathlib import Path
+
+          log = Path("ffmpeg-gradle-validation.log")
+          if not log.exists():
+              raise SystemExit(0)
+          lines = log.read_text(errors="replace").splitlines()
+          if len(lines) <= 60:
+              excerpt = lines
+          else:
+              excerpt = lines[:20] + ["... (middle of Gradle log omitted) ..."] + lines[-40:]
+          excerpt = [line[:1000] for line in excerpt]
+          report = "FFmpeg Gradle output validation failure:\n\n```text\n" + "\n".join(excerpt) + "\n```\n"
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write(report)
+          message = "\n".join(excerpt) or "Gradle did not produce an output validation log."
+          message = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+          print(f"::error title=FFmpeg Gradle output validation failure::{message}")
+          PYTHON
+
+      - name: Upload FFmpeg Gradle output validation log on failure
+        if: ${{ failure() && steps.ffmpeg_outputs.outcome == 'failure' }}
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: cinema-cut-pro-ffmpeg-gradle-log-${{ github.run_number }}-${{ github.run_attempt }}
+          path: ffmpeg-gradle-validation.log
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Build APK for approved test release
         if: ${{ (github.event_name == 'workflow_dispatch' && inputs.publish_test_release == true) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[publish-test-release]')) }}
         id: build_apk
