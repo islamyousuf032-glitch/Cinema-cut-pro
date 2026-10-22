@@ -64,6 +64,8 @@ class MotionCamRawPreviewEngine(private val context: Context) : PreviewEngine {
     @Volatile private var previewAdjustmentParams = VideoAdjustmentParams.default()
     private var loadJob: Job? = null
     private var playbackJob: Job? = null
+    private var pausedGradeRefreshJob: Job? = null
+    @Volatile private var lastPausedGradeRefreshMs = 0L
     private var playWhenReady = false
     @Volatile private var released = false
 
@@ -89,14 +91,35 @@ class MotionCamRawPreviewEngine(private val context: Context) : PreviewEngine {
     ) {
         if (released) return
         val uriChanged = uriString != requestedUri
-        requestedUri = uriString
-        if (evaluatedParams != null) {
-            previewAdjustmentParams = evaluatedParams
-        } else if (uriChanged) {
-            previewAdjustmentParams = VideoAdjustmentParams.default()
+        val wasFirstFrameRendered = _firstFrameRendered.value
+        val previousParams = previewAdjustmentParams
+        val nextParams = evaluatedParams ?: if (uriChanged) {
+            VideoAdjustmentParams.default()
+        } else {
+            previousParams
         }
+        val nativeGradeChanged = !uriChanged && evaluatedParams != null &&
+            MotionCamPreviewGradeSupport.hasNativeGradeChanged(previousParams, nextParams)
+        val targetPositionMs = sourcePositionMs.coerceAtLeast(0L)
+        val currentPositionMs = currentPositionUsValue / 1_000L
+        val sameFrameGradeUpdate = !uriChanged && !forceSeek && wasFirstFrameRendered &&
+            evaluatedParams != null &&
+            abs(currentPositionMs - targetPositionMs) <= GRADE_UPDATE_POSITION_TOLERANCE_MS
+
+        requestedUri = uriString
+        previewAdjustmentParams = nextParams
+        if (sameFrameGradeUpdate) {
+            _currentError.value = null
+            if (nativeGradeChanged && playbackJob?.isActive != true && !playWhenReady) {
+                requestPausedGradeRefresh(uriString)
+            }
+            return
+        }
+
         val resumePlayback = playbackJob?.isActive == true || playWhenReady
         if (resumePlayback) playWhenReady = true
+        pausedGradeRefreshJob?.cancel()
+        pausedGradeRefreshJob = null
         playbackJob?.cancel()
         playbackJob = null
         loadJob?.cancel()
@@ -107,7 +130,6 @@ class MotionCamRawPreviewEngine(private val context: Context) : PreviewEngine {
             if (uriChanged) _currentBitmap.value = null
         }
 
-        val targetPositionMs = sourcePositionMs.coerceAtLeast(0L)
         loadJob = scope.launch {
             try {
                 val frame = withContext(Dispatchers.IO) {
@@ -138,6 +160,44 @@ class MotionCamRawPreviewEngine(private val context: Context) : PreviewEngine {
                 if (released || requestedUri != uriString) return@launch
                 _currentError.value = error.message ?: "Could not decode MotionCam RAW preview"
                 _currentState.value = PreviewState.ERROR
+            }
+        }
+    }
+
+    private fun requestPausedGradeRefresh(uriString: String) {
+        if (released || playbackJob?.isActive == true || playWhenReady) return
+        pausedGradeRefreshJob?.cancel()
+        val nowMs = android.os.SystemClock.elapsedRealtime()
+        val waitMs = (GRADE_REFRESH_INTERVAL_MS - (nowMs - lastPausedGradeRefreshMs).coerceAtLeast(0L))
+            .coerceAtLeast(0L)
+        pausedGradeRefreshJob = scope.launch {
+            try {
+                if (waitMs > 0L) delay(waitMs)
+                if (released || requestedUri != uriString || playbackJob?.isActive == true ||
+                    playWhenReady || !_firstFrameRendered.value
+                ) return@launch
+
+                val bitmap = withContext(Dispatchers.IO) {
+                    decoderMutex.withLock {
+                        if (released || requestedUri != uriString || handle == 0L ||
+                            playbackJob?.isActive == true
+                        ) return@withLock null
+                        val rendered = decodeFrame(currentFrameIndex, STILL_MAX_EDGE, previewAdjustmentParams)
+                        lastPausedGradeRefreshMs = android.os.SystemClock.elapsedRealtime()
+                        rendered
+                    }
+                } ?: return@launch
+
+                if (released || requestedUri != uriString || playbackJob?.isActive == true || playWhenReady) {
+                    bitmap.recycle()
+                    return@launch
+                }
+                _currentBitmap.value = bitmap
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                if (released || requestedUri != uriString) return@launch
+                _currentError.value = error.message ?: "MotionCam grade preview failed"
             }
         }
     }
@@ -248,6 +308,8 @@ class MotionCamRawPreviewEngine(private val context: Context) : PreviewEngine {
 
     override fun play() {
         if (released || requestedUri == null) return
+        pausedGradeRefreshJob?.cancel()
+        pausedGradeRefreshJob = null
         playWhenReady = true
         if (frameTimestampsNs.isEmpty()) return
         playbackJob?.cancel()
@@ -267,10 +329,16 @@ class MotionCamRawPreviewEngine(private val context: Context) : PreviewEngine {
     }
 
     override fun pause() {
+        val wasPlaying = playbackJob?.isActive == true
         playWhenReady = false
         playbackJob?.cancel()
         playbackJob = null
         if (_currentState.value == PreviewState.PLAYING) _currentState.value = PreviewState.READY
+        if (wasPlaying && _firstFrameRendered.value &&
+            MotionCamPreviewGradeSupport.hasNativePreviewAdjustments(previewAdjustmentParams)
+        ) {
+            requestedUri?.let(::requestPausedGradeRefresh)
+        }
     }
 
     override fun seekTo(timeUs: Long) {
@@ -296,6 +364,8 @@ class MotionCamRawPreviewEngine(private val context: Context) : PreviewEngine {
         requestedUri = null
         playWhenReady = false
         loadJob?.cancel()
+        pausedGradeRefreshJob?.cancel()
+        pausedGradeRefreshJob = null
         pause()
         _currentBitmap.value = null
         _currentError.value = null
@@ -319,6 +389,7 @@ class MotionCamRawPreviewEngine(private val context: Context) : PreviewEngine {
         playWhenReady = false
         loadJob?.cancel()
         playbackJob?.cancel()
+        pausedGradeRefreshJob?.cancel()
         onTimeChanged = null
         val cleanupScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         cleanupScope.launch {
@@ -362,5 +433,7 @@ class MotionCamRawPreviewEngine(private val context: Context) : PreviewEngine {
     companion object {
         private const val STILL_MAX_EDGE = 960
         private const val PLAYBACK_MAX_EDGE = 480
+        private const val GRADE_UPDATE_POSITION_TOLERANCE_MS = 250L
+        private const val GRADE_REFRESH_INTERVAL_MS = 33L
     }
 }
