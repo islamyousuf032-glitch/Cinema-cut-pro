@@ -7,6 +7,29 @@ plugins {
   alias(libs.plugins.kotlin.serialization)
 }
 
+val ffmpegBuildRoot = layout.buildDirectory.dir("ffmpeg-android").get().asFile
+val ffmpegLibraries = listOf("avutil", "avcodec", "avformat", "swscale", "swresample")
+val ffmpegBuildOutputs = ffmpegLibraries.flatMap { library ->
+  listOf(
+    ffmpegBuildRoot.resolve("prefix/lib/lib${library}.so"),
+    ffmpegBuildRoot.resolve("jniLibs/arm64-v8a/lib${library}.so")
+  )
+} + listOf(
+  ffmpegBuildRoot.resolve("prefix/include"),
+  ffmpegBuildRoot.resolve("assets/ffmpeg/COPYING.LGPLv2.1"),
+  ffmpegBuildRoot.resolve("assets/ffmpeg/FFMPEG_BUILD_INFO.txt")
+)
+val buildFfmpegAndroid by tasks.registering(Exec::class) {
+  group = "build"
+  description = "Builds the pinned LGPL-only FFmpeg libraries for Android MediaCodec playback."
+  workingDir(rootProject.projectDir)
+  commandLine("bash", rootProject.file("tools/build_ffmpeg_android.sh").absolutePath)
+  environment("FFMPEG_BUILD_JOBS", providers.gradleProperty("ffmpegBuildJobs").orElse("2").get())
+  inputs.file(rootProject.file("tools/build_ffmpeg_android.sh"))
+  inputs.property("ffmpegSourceRevision", "1041abdc962f4cc4f394aa8de9dc5236c0c3b9e7")
+  outputs.files(ffmpegBuildOutputs)
+}
+
 val releaseKeystoreFile = System.getenv("KEYSTORE_PATH")
   ?.takeIf { it.isNotBlank() }
   ?.let { rootProject.file(it) }
@@ -34,6 +57,7 @@ android {
     externalNativeBuild {
       cmake {
         cppFlags += "-std=c++17"
+        arguments += "-DFFMPEG_PREFIX=${ffmpegBuildRoot.resolve("prefix").absolutePath}"
       }
     }
     ndk {
@@ -47,6 +71,9 @@ android {
       version = "3.22.1"
     }
   }
+
+  sourceSets.getByName("main").jniLibs.srcDir(ffmpegBuildRoot.resolve("jniLibs"))
+  sourceSets.getByName("main").assets.srcDir(ffmpegBuildRoot.resolve("assets"))
 
   signingConfigs {
     if (releaseSigningConfigured) {
@@ -86,6 +113,14 @@ android {
 secrets {
   propertiesFileName = ".env"
   defaultPropertiesFileName = ".env.example"
+}
+
+// FFmpeg headers/libraries are required by the native decoder target and the app package.
+tasks.configureEach {
+  val needsFfmpeg = name == "preBuild" ||
+    ((name.startsWith("configureCMake") || name.startsWith("externalNativeBuild")) &&
+      !name.contains("clean", ignoreCase = true))
+  if (needsFfmpeg) dependsOn(buildFfmpegAndroid)
 }
 
 // Some unused dependencies are commented out below instead of being removed.

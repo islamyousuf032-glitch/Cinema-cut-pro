@@ -21,7 +21,7 @@ class PreviewEngineRoutingTest {
     }
 
     @Test
-    fun explicitLegacyLibVlcPreferenceRemainsAvailable() {
+    fun explicitFfmpegAndLibVlcPreferencesRemainAvailable() {
         assertEquals(
             PreviewEngineType.FFMPEG_NATIVE,
             resolveRequestedPreviewEngine(PreviewEngineType.FFMPEG_NATIVE)
@@ -30,6 +30,8 @@ class PreviewEngineRoutingTest {
             PreviewEngineType.VLC_NATIVE,
             resolveRequestedPreviewEngine(PreviewEngineType.VLC_NATIVE)
         )
+        assertEquals("FFmpeg native playback", PreviewEngineType.FFMPEG_NATIVE.displayName)
+        assertEquals("LibVLC playback fallback", PreviewEngineType.VLC_NATIVE.displayName)
     }
 
     @Test

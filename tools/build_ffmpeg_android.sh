@@ -15,6 +15,10 @@ API_LEVEL="${ANDROID_API_LEVEL:-${DEFAULT_API_LEVEL}}"
 SOURCE_DIR="${FFMPEG_SOURCE_DIR:-${WORK_DIR}/source}"
 BUILD_DIR="${WORK_DIR}/build"
 PREFIX="${WORK_DIR}/prefix"
+JNI_LIBS_ROOT="${WORK_DIR}/jniLibs"
+JNI_LIBS_DIR="${JNI_LIBS_ROOT}/arm64-v8a"
+ASSETS_ROOT="${WORK_DIR}/assets"
+ASSETS_DIR="${ASSETS_ROOT}/ffmpeg"
 
 if [[ "${API_LEVEL}" != "${DEFAULT_API_LEVEL}" ]]; then
   echo "ANDROID_API_LEVEL is pinned to ${DEFAULT_API_LEVEL} to match the app minSdk; got '${API_LEVEL}'." >&2
@@ -96,15 +100,16 @@ fi
 # Only directories carrying our marker are cleaned on rebuild; never remove an unrelated
 # directory if the caller supplied an unexpected output path.
 readonly GENERATED_MARKER=".cinema-cut-pro-ffmpeg-generated"
-for generated_dir in "${BUILD_DIR}" "${PREFIX}"; do
+for generated_dir in "${BUILD_DIR}" "${PREFIX}" "${JNI_LIBS_ROOT}" "${ASSETS_ROOT}"; do
   if [[ -e "${generated_dir}" && ! -f "${generated_dir}/${GENERATED_MARKER}" ]]; then
     echo "Refusing to remove unmarked output directory: ${generated_dir}." >&2
     exit 2
   fi
 done
-rm -rf "${BUILD_DIR}" "${PREFIX}"
-mkdir -p "${BUILD_DIR}" "${PREFIX}"
+rm -rf "${BUILD_DIR}" "${PREFIX}" "${JNI_LIBS_ROOT}" "${ASSETS_ROOT}"
+mkdir -p "${BUILD_DIR}" "${PREFIX}" "${JNI_LIBS_DIR}" "${ASSETS_DIR}"
 touch "${BUILD_DIR}/${GENERATED_MARKER}" "${PREFIX}/${GENERATED_MARKER}"
+touch "${JNI_LIBS_ROOT}/${GENERATED_MARKER}" "${ASSETS_ROOT}/${GENERATED_MARKER}"
 cd "${BUILD_DIR}"
 
 "${SOURCE_DIR}/configure" \
@@ -161,6 +166,9 @@ for library in avutil avcodec avformat swscale swresample; do
     echo "Expected FFmpeg shared library was not installed: ${PREFIX}/lib/lib${library}.so" >&2
     exit 1
   fi
+  # Android packages one ABI directory of shared objects; dereference any install symlink so
+  # the copied JNI library retains the FFmpeg Android SONAME and is self-contained.
+  cp -L "${PREFIX}/lib/lib${library}.so" "${JNI_LIBS_DIR}/lib${library}.so"
 done
 
 cat > "${PREFIX}/FFMPEG_BUILD_INFO.txt" <<EOF
@@ -173,6 +181,13 @@ License configuration: default LGPL-only (GPL, version 3, and nonfree options no
 MediaCodec: enabled
 Libraries: shared, position-independent
 EOF
+
+if [[ ! -f "${SOURCE_DIR}/COPYING.LGPLv2.1" ]]; then
+  echo "The pinned FFmpeg source does not contain COPYING.LGPLv2.1." >&2
+  exit 2
+fi
+cp "${SOURCE_DIR}/COPYING.LGPLv2.1" "${ASSETS_DIR}/COPYING.LGPLv2.1"
+cp "${PREFIX}/FFMPEG_BUILD_INFO.txt" "${ASSETS_DIR}/FFMPEG_BUILD_INFO.txt"
 
 echo "FFmpeg ${FFMPEG_TAG} (${FFMPEG_COMMIT}) built for arm64-v8a/API ${API_LEVEL}."
 echo "Shared libraries and headers: ${PREFIX}"

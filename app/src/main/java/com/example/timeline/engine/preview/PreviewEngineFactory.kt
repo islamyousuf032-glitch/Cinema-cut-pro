@@ -11,7 +11,12 @@ object PreviewEngineFactory {
         val targetType = resolveRequestedPreviewEngine(type)
 
         when (targetType) {
-            PreviewEngineType.FFMPEG_NATIVE,
+            PreviewEngineType.FFMPEG_NATIVE -> {
+                if (isRunningUnderRobolectric(context)) {
+                    return Media3FallbackPreviewEngine(context)
+                }
+                return FfmpegNativePreviewEngine(context)
+            }
             PreviewEngineType.VLC_NATIVE -> {
                 if (isRunningUnderRobolectric(context)) {
                     if (com.example.BuildConfig.DEBUG) {

@@ -6,9 +6,7 @@ import kotlinx.coroutines.flow.StateFlow
 
 enum class PreviewEngineType(val displayName: String) {
     AUTO("Auto (Media3 first)"),
-    // The enum id is retained for saved preference compatibility; playback is LibVLC, not a
-    // standalone/native C++ FFmpeg backend.
-    FFMPEG_NATIVE("LibVLC playback fallback (legacy setting)"),
+    FFMPEG_NATIVE("FFmpeg native playback"),
     VLC_NATIVE("LibVLC playback fallback"),
     MEDIA3_FALLBACK("Media3 ExoPlayer"),
     BROWSER("WebView/Browser"),

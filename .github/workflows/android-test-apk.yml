@@ -11,11 +11,6 @@ on:
         required: false
         default: false
         type: boolean
-      verify_ffmpeg_source_build:
-        description: Build pinned FFmpeg LGPL sources for Android (verification only; publishes no artifact)
-        required: false
-        default: false
-        type: boolean
 
 permissions:
   contents: write
@@ -50,11 +45,11 @@ jobs:
       - name: Set up Gradle caching
         uses: gradle/actions/setup-gradle@v6.4.0
 
-      - name: Build debug APK and run JVM tests
+      - name: Compile app and native code, then run JVM tests
         shell: bash
         run: |
           set -o pipefail
-          ./gradlew --no-daemon --stacktrace :app:assembleDebug :app:testDebugUnitTest 2>&1 | tee gradle-build.log
+          ./gradlew --no-daemon --stacktrace :app:compileDebugKotlin :app:externalNativeBuildDebug :app:testDebugUnitTest 2>&1 | tee gradle-build.log
 
       - name: Surface Gradle failure details
         if: failure()
@@ -130,38 +125,12 @@ jobs:
       - name: Run native C++ host tests
         run: python3 tools/run_native_export_tests.py
 
-      - name: Check optional FFmpeg build script syntax
+      - name: Check FFmpeg build script syntax
         run: bash -n tools/build_ffmpeg_android.sh
 
-      - name: Build pinned FFmpeg Android sources (verification only)
-        id: ffmpeg_build
-        if: |
-          (github.event_name == 'workflow_dispatch' && inputs.verify_ffmpeg_source_build == true) ||
-          (github.event_name == 'push' && startsWith(github.event.head_commit.message, 'build(ffmpeg):'))
-        env:
-          FFMPEG_BUILD_JOBS: 2
-        shell: bash
-        run: |
-          set -o pipefail
-          tools/build_ffmpeg_android.sh 2>&1 | tee ffmpeg-build.log
-
-      - name: Report FFmpeg build failure details
-        if: always() && steps.ffmpeg_build.outcome == 'failure'
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          import os
-          from pathlib import Path
-
-          log = Path("ffmpeg-build.log")
-          excerpt = "\n".join(log.read_text(errors="replace").splitlines()[-35:]) if log.exists() else "No FFmpeg build log was produced."
-          if len(excerpt) > 3000:
-              excerpt = "... earlier output omitted ...\n" + excerpt[-3000:]
-          message = excerpt.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
-          print(f"::error title=FFmpeg source build failed::{message}")
-          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
-              summary.write("## FFmpeg Android source-build failure\n\n```text\n" + excerpt + "\n```\n")
-          PY
+      - name: Build APK for explicitly approved test release
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_test_release == true
+        run: ./gradlew --no-daemon --stacktrace :app:assembleDebug
 
       - name: Prepare APK and checksum
         if: github.event_name == 'workflow_dispatch' && inputs.publish_test_release == true

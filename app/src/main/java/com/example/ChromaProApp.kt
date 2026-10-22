@@ -277,10 +277,12 @@ fun ChromaProApp(viewModel: MainViewModel = viewModel()) {
                     "avgFrameProcessingOffsetMs" to (media3Metrics?.averageVideoFrameProcessingOffsetMs?.toString() ?: "unknown"),
                     "libVlcAvailable" to runCatching { Class.forName("org.videolan.libvlc.LibVLC"); "true" }.getOrDefault("false"),
                     "libVlcPlaybackBackend" to if (
-                        engine.engineType == com.example.timeline.engine.preview.PreviewEngineType.FFMPEG_NATIVE ||
                         engine.engineType == com.example.timeline.engine.preview.PreviewEngineType.VLC_NATIVE
                     ) "LibVLC 3.5.1 Java API" else "not selected",
-                    "nativeFfmpegPlayerAvailable" to "false",
+                    "ffmpegPlaybackBackend" to if (
+                        engine.engineType == com.example.timeline.engine.preview.PreviewEngineType.FFMPEG_NATIVE
+                    ) "FFmpeg n8.1.3 JNI video decoder with Media3 audio" else "not selected",
+                    "nativeFfmpegPlayerAvailable" to (engine.engineType == com.example.timeline.engine.preview.PreviewEngineType.FFMPEG_NATIVE).toString(),
                     "media3PrimaryUsed" to (engine.engineType == com.example.timeline.engine.preview.PreviewEngineType.MEDIA3_FALLBACK).toString(),
                     "firstFrameRendered" to engine.firstFrameRendered.collectAsState().value.toString()
                 )

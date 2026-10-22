@@ -129,9 +129,9 @@ fun VideoViewportSection(
             timelineViewModel.markAssetProxyPlaybackFailed(asset.assetId)
         }
 
-        val isLibVlcEngine = engineType == com.example.timeline.engine.preview.PreviewEngineType.FFMPEG_NATIVE ||
+        val isFallbackEngine = engineType == com.example.timeline.engine.preview.PreviewEngineType.FFMPEG_NATIVE ||
             engineType == com.example.timeline.engine.preview.PreviewEngineType.VLC_NATIVE
-        if (isLibVlcEngine && previewSettings.autoFallbackOnFailure) {
+        if (isFallbackEngine && previewSettings.autoFallbackOnFailure) {
             timelinePreviewController.setEngineType(com.example.timeline.engine.preview.PreviewEngineType.MEDIA3_FALLBACK)
             editorViewModel.updateSelectedEngine(com.example.timeline.engine.preview.PreviewEngineType.MEDIA3_FALLBACK)
             if (isPlaying) timelinePreviewController.play()
@@ -148,13 +148,13 @@ fun VideoViewportSection(
         firstFrameRendered,
         previewSettings.autoFallbackOnFailure
     ) {
-        val libVlcEngine = engineType == com.example.timeline.engine.preview.PreviewEngineType.FFMPEG_NATIVE ||
+        val nativeFallbackEngine = engineType == com.example.timeline.engine.preview.PreviewEngineType.FFMPEG_NATIVE ||
             engineType == com.example.timeline.engine.preview.PreviewEngineType.VLC_NATIVE
         val engineAtStart = timelinePreviewController.previewEngine
         val assetIdAtStart = currentAsset?.assetId
         if (
             previewSettings.autoFallbackOnFailure &&
-            libVlcEngine &&
+            nativeFallbackEngine &&
             currentAsset?.mimeType?.startsWith("video/") == true &&
             !firstFrameRendered &&
             playerState != com.example.timeline.engine.preview.PreviewState.ERROR
@@ -169,7 +169,7 @@ fun VideoViewportSection(
                 timelinePreviewController.activeAsset.value?.assetId == assetIdAtStart
             ) {
                 if (com.example.BuildConfig.DEBUG) {
-                    android.util.Log.d("VideoViewportSection", "LibVLC produced no first frame; switching to Media3")
+                    android.util.Log.d("VideoViewportSection", "Native preview produced no first frame; switching to Media3")
                 }
                 timelinePreviewController.setEngineType(com.example.timeline.engine.preview.PreviewEngineType.MEDIA3_FALLBACK)
                 editorViewModel.updateSelectedEngine(com.example.timeline.engine.preview.PreviewEngineType.MEDIA3_FALLBACK)

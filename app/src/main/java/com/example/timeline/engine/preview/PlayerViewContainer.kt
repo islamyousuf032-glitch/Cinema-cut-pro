@@ -76,7 +76,8 @@ fun PlayerViewContainer(
         ViewportTransformLayer(renderState = renderState, colorFilter = currentColorFilter) {
             when (previewEngine) {
                 is MotionCamRawPreviewEngine -> {
-                    val bitmap = previewEngine.currentBitmap.collectAsState().value
+                    val frameRevision = previewEngine.currentFrameRevision.collectAsState().value
+                    val bitmap = previewEngine.currentBitmap.value
                     AndroidView(
                         factory = { ctx ->
                             android.widget.ImageView(ctx).apply {
@@ -85,11 +86,25 @@ fun PlayerViewContainer(
                             }
                         },
                         update = { view ->
-                            if (view.tag !== bitmap) {
+                            if (view.tag != frameRevision) {
                                 view.setImageBitmap(bitmap)
-                                view.tag = bitmap
+                                view.invalidate()
+                                view.tag = frameRevision
                             }
                         },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+                is com.example.timeline.engine.preview.FfmpegNativePreviewEngine -> {
+                    AndroidView(
+                        factory = { ctx ->
+                            android.view.TextureView(ctx).apply {
+                                isOpaque = false
+                                setBackgroundColor(android.graphics.Color.BLACK)
+                            }
+                        },
+                        update = { view -> previewEngine.attachToTextureView(view) },
+                        onRelease = { view -> previewEngine.detachFromTextureView(view) },
                         modifier = Modifier.fillMaxSize()
                     )
                 }

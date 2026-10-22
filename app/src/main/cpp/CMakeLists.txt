@@ -24,6 +24,49 @@ find_library(
         log-lib
         log)
 
+find_library(
+        mediandk-lib
+        mediandk)
+
+find_library(
+        android-lib
+        android)
+
+if(NOT DEFINED FFMPEG_PREFIX)
+    set(FFMPEG_PREFIX "${CMAKE_CURRENT_SOURCE_DIR}/../../../build/ffmpeg-android/prefix")
+endif()
+set(FFMPEG_INCLUDE_DIR "${FFMPEG_PREFIX}/include")
+if(NOT EXISTS "${FFMPEG_INCLUDE_DIR}/libavcodec/avcodec.h")
+    message(FATAL_ERROR "FFmpeg headers are missing. Build the pinned LGPL FFmpeg dependencies first: ${FFMPEG_PREFIX}")
+endif()
+
+foreach(ffmpeg_component IN ITEMS avutil avcodec avformat swscale swresample)
+    set(ffmpeg_library "${FFMPEG_PREFIX}/lib/lib${ffmpeg_component}.so")
+    if(NOT EXISTS "${ffmpeg_library}")
+        message(FATAL_ERROR "Required FFmpeg shared library is missing: ${ffmpeg_library}")
+    endif()
+    add_library("ffmpeg_${ffmpeg_component}" SHARED IMPORTED GLOBAL)
+    set_target_properties("ffmpeg_${ffmpeg_component}" PROPERTIES
+            IMPORTED_LOCATION "${ffmpeg_library}")
+endforeach()
+
+add_library(
+        ffmpeg_decoder
+        SHARED
+        ffmpeg_decoder.cpp)
+target_compile_features(ffmpeg_decoder PRIVATE cxx_std_17)
+target_include_directories(ffmpeg_decoder PRIVATE "${FFMPEG_INCLUDE_DIR}")
+target_link_libraries(
+        ffmpeg_decoder
+        ffmpeg_avformat
+        ffmpeg_avcodec
+        ffmpeg_swscale
+        ffmpeg_swresample
+        ffmpeg_avutil
+        ${mediandk-lib}
+        ${android-lib}
+        ${log-lib})
+
 target_link_libraries(
         native_player
         ${log-lib})
