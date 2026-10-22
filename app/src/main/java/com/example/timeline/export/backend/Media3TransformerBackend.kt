@@ -115,7 +115,8 @@ class Media3TransformerBackend(context: Context) : ExportBackend {
         val height: Int,
         val frameRate: Float,
         val bitrate: Int,
-        val bitrateMode: Int
+        val bitrateMode: Int,
+        val hardwareAccelerated: Boolean
     )
 
     private data class AudioEncoderQuery(val sampleRate: Int, val channelCount: Int, val bitrate: Int)
@@ -390,6 +391,10 @@ class Media3TransformerBackend(context: Context) : ExportBackend {
             errors += "The requested output frame rate is invalid or exceeds the adapter limit."
         }
         if (settings.videoBitrate <= 0) errors += "The target video bitrate must be positive."
+        if (settings.maxBitrate <= 0) errors += "The maximum video bitrate must be positive."
+        else if (settings.maxBitrate != settings.videoBitrate) {
+            errors += "This export path exposes one target bitrate only; set maximum bitrate equal to the target bitrate."
+        }
         if (settings.audioBitrate <= 0) errors += "The target audio bitrate must be positive."
         if (settings.keyframeInterval <= 0) errors += "The keyframe interval must be positive."
         if (settings.bitrateMode == ExportSettings.BitrateMode.CRF) {
@@ -398,7 +403,7 @@ class Media3TransformerBackend(context: Context) : ExportBackend {
         if (settings.profile != null || settings.level != null) {
             errors += "Custom H.264 profile and level selection is not supported by this export path."
         }
-        if (!settings.useHardwareEncoder) errors += "This export path requires the Android platform encoder."
+        if (!settings.useHardwareEncoder) errors += "This export path cannot force a software-only encoder; hardware acceleration is checked when requested and remains best-effort at render time."
         if (!settings.useOriginalMedia || settings.allowProxyExport) {
             errors += "This export path reads original media only; proxy selection is not implemented."
         }
@@ -561,8 +566,8 @@ class Media3TransformerBackend(context: Context) : ExportBackend {
         if (includeAudio && !hasAudioEncoder(settings.audioSampleRate, settings.audioChannels, settings.audioBitrate)) {
             errors += "No Android AAC encoder supports the requested source audio format."
         }
-        if (activeClips.isNotEmpty() && !hasVideoEncoder(settings)) {
-            errors += "No Android H.264 encoder supports the requested resolution, frame rate, and bitrate."
+        if (activeClips.isNotEmpty() && settings.useHardwareEncoder && !hasVideoEncoder(settings)) {
+            errors += "No hardware-accelerated Android H.264 encoder supports the requested resolution, frame rate, bitrate, and bitrate mode."
         }
 
         return errors.distinct()
@@ -572,11 +577,6 @@ class Media3TransformerBackend(context: Context) : ExportBackend {
         val warnings = mutableListOf<String>()
         if (settings.useHardwareEncoder) {
             warnings += "Media3 selects a compatible Android codec; this adapter cannot guarantee hardware acceleration."
-        }
-        if (settings.bitrateMode in setOf(ExportSettings.BitrateMode.AUTO, ExportSettings.BitrateMode.VBR) &&
-            settings.maxBitrate > 0 && settings.maxBitrate != settings.videoBitrate
-        ) {
-            warnings += "Media3 requests the target average bitrate; a separate maximum bitrate is not independently enforced by this adapter."
         }
         val activeAssets = project.tracks
             .filter { it.type == TrackType.VIDEO && it.isVisible }
@@ -635,17 +635,21 @@ class Media3TransformerBackend(context: Context) : ExportBackend {
             ExportSettings.BitrateMode.VBR,
             ExportSettings.BitrateMode.CRF -> MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR
         }
+        if (!settings.useHardwareEncoder) return false
         val query = VideoEncoderQuery(
-            settings.resolutionWidth,
-            settings.resolutionHeight,
-            settings.frameRate.floatValue,
-            settings.videoBitrate,
-            bitrateMode
+            width = settings.resolutionWidth,
+            height = settings.resolutionHeight,
+            frameRate = settings.frameRate.floatValue,
+            bitrate = settings.videoBitrate,
+            bitrateMode = bitrateMode,
+            hardwareAccelerated = settings.useHardwareEncoder
         )
         return videoEncoderSupportCache.computeIfAbsent(query) {
             runCatching {
                 MediaCodecList(MediaCodecList.ALL_CODECS).codecInfos.any { codecInfo ->
-                    codecInfo.isEncoder && codecInfo.supportedTypes.any { it.equals(MediaFormat.MIMETYPE_VIDEO_AVC, true) } &&
+                    codecInfo.isEncoder &&
+                        isHardwareAcceleratedEncoder(codecInfo) == query.hardwareAccelerated &&
+                        codecInfo.supportedTypes.any { it.equals(MediaFormat.MIMETYPE_VIDEO_AVC, true) } &&
                         runCatching {
                             val capabilities = codecInfo.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_AVC)
                             val video = capabilities.videoCapabilities ?: return@runCatching false
@@ -660,6 +664,19 @@ class Media3TransformerBackend(context: Context) : ExportBackend {
                 }
             }.getOrDefault(false)
         }
+    }
+
+    private fun isHardwareAcceleratedEncoder(codecInfo: MediaCodecInfo): Boolean {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            return codecInfo.isHardwareAccelerated
+        }
+
+        // MediaCodecInfo.isHardwareAccelerated is unavailable before API 29. Android's software
+        // codecs use these stable names; unknown vendor encoders are treated as hardware-capable.
+        val name = codecInfo.name.lowercase()
+        return !name.startsWith("omx.google.") &&
+            !name.startsWith("c2.android.") &&
+            !name.contains("software")
     }
 
     private fun hasAudioEncoder(sampleRate: Int, channelCount: Int, bitrate: Int): Boolean {
