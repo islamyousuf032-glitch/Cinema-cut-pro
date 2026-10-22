@@ -47,6 +47,9 @@ target_include_directories(
         ${MOTIONCAM_DECODER_ROOT}/lib/include
         ${MOTIONCAM_DECODER_ROOT}/thirdparty)
 target_compile_features(motioncam_decoder PUBLIC cxx_std_17)
+# RAW demosaic and decompression run on every preview frame. Keep debug-device builds optimized
+# enough to be usable while preserving native symbols for diagnosing issues.
+target_compile_options(motioncam_decoder PRIVATE $<$<CONFIG:Debug>:-O2>)
 set_target_properties(motioncam_decoder PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 add_library(
@@ -56,6 +59,7 @@ add_library(
         mcraw_preview_renderer.cpp)
 target_include_directories(motioncam_preview PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_features(motioncam_preview PRIVATE cxx_std_17)
+target_compile_options(motioncam_preview PRIVATE $<$<CONFIG:Debug>:-O2>)
 target_link_libraries(
         motioncam_preview
         motioncam_decoder
