@@ -1,143 +1,89 @@
 package com.example.timeline.export.validation
 
 import android.content.Context
-import android.media.MediaCodecList
-import android.media.MediaFormat
 import android.net.Uri
 import android.os.Environment
 import com.example.timeline.core.TimelineProject
 import com.example.timeline.core.TrackType
 import com.example.timeline.export.model.ExportSettings
-import com.example.timeline.export.model.ExportCodec
-import com.example.timeline.export.model.ExportContainer
 import java.io.File
+import java.util.Locale
 
+/**
+ * Runtime environment checks for the selected export backend.
+ *
+ * Codec, container, encoder, timeline-layout, and effect support are validated by the backend
+ * itself. Keeping this class limited to source accessibility and storage avoids a second, generic
+ * codec validator disagreeing with the Media3 backend used by both the export UI and worker.
+ */
 object ExportValidator {
 
     fun validate(context: Context, project: TimelineProject, settings: ExportSettings): List<ExportError> {
         val errors = mutableListOf<ExportError>()
+        val activeVideoTrack = project.tracks.singleOrNull { track ->
+            track.type == TrackType.VIDEO && track.isVisible && track.clips.any { it.isEnabled }
+        }
+        val enabledVideoClips = activeVideoTrack?.clips?.filter { it.isEnabled }.orEmpty()
 
-        // 1. Project has timeline clips
-        val hasClips = project.tracks.any { track -> track.isVisible && track.clips.any { it.isEnabled } }
-        if (!hasClips) {
-            errors.add(ExportError(ExportErrorType.MISSING_MEDIA, "Timeline is empty. No clips to export."))
+        enabledVideoClips.forEach { clip ->
+            val asset = project.mediaAssets.firstOrNull { it.assetId == clip.mediaId } ?: return@forEach
+            val sourceUriString = asset.localOriginalUriString
+                ?.takeIf { it.isNotBlank() }
+                ?: asset.originalUriString
+            if (!isSourceReadable(context, sourceUriString)) {
+                errors += ExportError(
+                    ExportErrorType.MISSING_MEDIA,
+                    "Missing or unreadable media file: ${asset.displayName}"
+                )
+            }
         }
 
-        // 2 & 3. Media files exist
-        project.tracks
-            .filter { track -> track.isVisible && (track.type != TrackType.AUDIO || !track.isMuted) }
-            .flatMap { track -> track.clips.filter { it.isEnabled } }
-            .forEach { clip ->
-                val asset = project.mediaAssets.find { it.assetId == clip.mediaId }
-                if (asset != null) {
-                    // If it's a content URI, we assume it exists unless we try to open it.
-                    // We will check for file scheme or absolute path.
-                    val uriString = asset.localOriginalUriString?.takeIf { it.isNotBlank() } ?: asset.originalUriString
-                    val uri = Uri.parse(uriString)
-                    val sourceFile = when (uri.scheme?.lowercase()) {
-                        "content" -> null
-                        "file" -> uri.path?.let(::File)
-                        else -> File(uriString)
-                    }
-                    val sourceAvailable = if (uri.scheme.equals("content", ignoreCase = true)) {
-                        runCatching {
-                            context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { true } ?: false
-                        }.getOrDefault(false)
-                    } else {
-                        sourceFile?.isFile == true && sourceFile.canRead()
-                    }
-                    if (!sourceAvailable) {
-                        errors.add(ExportError(ExportErrorType.MISSING_MEDIA, "Missing or unreadable media file: ${asset.displayName}"))
-                    }
+        val projectFps = project.settings.getFpsRational()
+        val enabledDurationFrames = runCatching {
+            enabledVideoClips.fold(0L) { total, clip -> Math.addExact(total, clip.duration) }
+        }.getOrNull()
+        if (enabledDurationFrames != null && enabledDurationFrames > 0L &&
+            projectFps.numerator > 0 && projectFps.denominator > 0 && settings.videoBitrate > 0
+        ) {
+            val includesEmbeddedAudio = activeVideoTrack?.isMuted == false && enabledVideoClips.isNotEmpty() &&
+                enabledVideoClips.all { clip ->
+                    project.mediaAssets.firstOrNull { it.assetId == clip.mediaId }?.metadata?.hasAudio == true
+                }
+            val totalBitrate = settings.videoBitrate.toDouble() +
+                if (includesEmbeddedAudio) settings.audioBitrate.toDouble() else 0.0
+            val durationSeconds = enabledDurationFrames.toDouble() *
+                projectFps.denominator.toDouble() / projectFps.numerator.toDouble()
+            val estimatedSizeBytes = durationSeconds * totalBitrate / 8.0
+            if (estimatedSizeBytes.isFinite() && estimatedSizeBytes > 0.0) {
+                val outputDirectory = context.getExternalFilesDir(Environment.DIRECTORY_MOVIES)
+                    ?: File(context.filesDir, Environment.DIRECTORY_MOVIES)
+                val storageProbe = generateSequence(outputDirectory) { it.parentFile }
+                    .firstOrNull { it.exists() && it.isDirectory }
+                    ?: context.filesDir
+                val usableSpace = storageProbe.usableSpace.toDouble()
+                if (usableSpace < estimatedSizeBytes) {
+                    errors += ExportError(
+                        ExportErrorType.OUT_OF_STORAGE,
+                        "Not enough storage space. Estimated: ${(estimatedSizeBytes / (1024.0 * 1024.0)).toLong()} MB, " +
+                            "Available: ${storageProbe.usableSpace / (1024 * 1024)} MB"
+                    )
                 }
             }
-
-        // 4. Output path writable
-        // We will assume that if we can create a temporary file, it's writable
-        // Usually, output file is provided or outputDirectoryUri.
-        
-        // 5. Codec supported
-        if (!isCodecSupported(settings.codec.name)) {
-            errors.add(ExportError(ExportErrorType.CODEC_UNSUPPORTED, "Codec ${settings.codec.name} is not supported on this device."))
         }
 
-        // 6. Container supported
-        if (settings.container != ExportContainer.MP4) {
-             errors.add(ExportError(ExportErrorType.CONTAINER_UNSUPPORTED, "Only MP4 container is currently supported."))
-        }
-
-        // 7. Resolution valid
-        if (settings.resolutionWidth <= 0 || settings.resolutionHeight <= 0) {
-            errors.add(ExportError(ExportErrorType.UNKNOWN, "Invalid resolution: ${settings.resolutionWidth}x${settings.resolutionHeight}"))
-        }
-
-        // 8. FPS valid
-        if (settings.frameRate.floatValue <= 0f) {
-            errors.add(ExportError(ExportErrorType.UNKNOWN, "Invalid frame rate: ${settings.frameRate.floatValue}"))
-        }
-
-        // 9. Bitrate valid
-        if (settings.videoBitrate <= 0) {
-            errors.add(ExportError(ExportErrorType.UNKNOWN, "Invalid video bitrate: ${settings.videoBitrate}"))
-        }
-
-        // 11. HDR/alpha support available
-        if (settings.exportHDR) {
-            // Need to check HDR support via MediaCodecInfo, simplifying for now
-            // errors.add(ExportError(ExportErrorType.CODEC_UNSUPPORTED, "HDR export not fully supported on this device yet."))
-        }
-
-        // 12. The Media3 path writes to app-scoped Movies storage; no native export library is
-        // required for this bounded H.264/MP4 adapter.
-
-        // 13. Estimate duration in seconds from the project's frame rate, then compare against the
-        // same app-scoped volume used by ExportScreen.
-        val projectFps = project.settings.getFpsRational()
-        val maxTimelineEnd = project.tracks.flatMap { it.clips }.maxOfOrNull { it.timelineEnd } ?: 0L
-        val durationSeconds = if (projectFps.numerator > 0 && projectFps.denominator > 0) {
-            maxTimelineEnd.toDouble() * projectFps.denominator / projectFps.numerator
-        } else {
-            0.0
-        }
-        val estimatedSizeBytes = durationSeconds *
-            (settings.videoBitrate.toDouble() + settings.audioBitrate.toDouble()) / 8.0
-        val outputDirectory = context.getExternalFilesDir(Environment.DIRECTORY_MOVIES)
-            ?: File(context.filesDir, Environment.DIRECTORY_MOVIES)
-        val storageProbe = generateSequence(outputDirectory) { it.parentFile }
-            .firstOrNull { it.exists() && it.isDirectory }
-            ?: context.filesDir
-        val usableSpace = storageProbe.usableSpace
-        if (usableSpace < estimatedSizeBytes) {
-            errors.add(ExportError(ExportErrorType.OUT_OF_STORAGE, "Not enough storage space. Estimated: ${(estimatedSizeBytes / (1024 * 1024)).toLong()} MB, Available: ${usableSpace / (1024 * 1024)} MB"))
-        }
-
-        return errors
+        return errors.distinctBy { it.type to it.message }
     }
 
-    private fun isCodecSupported(codecName: String): Boolean {
-        val mimeType = when (codecName) {
-            "H264" -> MediaFormat.MIMETYPE_VIDEO_AVC
-            "HEVC" -> MediaFormat.MIMETYPE_VIDEO_HEVC
-            "AV1" -> "video/av01"
-            else -> return false
+    private fun isSourceReadable(context: Context, uriString: String): Boolean {
+        if (uriString.isBlank()) return false
+        val uri = Uri.parse(uriString)
+        return when (uri.scheme?.lowercase(Locale.ROOT)) {
+            "content" -> runCatching {
+                context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { true } ?: false
+            }.getOrDefault(false)
+            "file" -> uri.path?.let(::File)?.let { it.isFile && it.canRead() } == true
+            null -> File(uriString).let { it.isFile && it.canRead() }
+            else -> false
         }
-        
-        try {
-            // Updated to non-deprecated method
-            val codecList = MediaCodecList(MediaCodecList.ALL_CODECS)
-            for (codecInfo in codecList.codecInfos) {
-                if (codecInfo.isEncoder) {
-                    val types = codecInfo.supportedTypes
-                    for (type in types) {
-                        if (type.equals(mimeType, ignoreCase = true)) {
-                            return true
-                        }
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            if (com.example.BuildConfig.DEBUG) e.printStackTrace()
-        }
-        return false
     }
 }

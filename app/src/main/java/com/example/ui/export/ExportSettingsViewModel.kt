@@ -14,9 +14,6 @@ import kotlinx.coroutines.flow.update
 class ExportSettingsViewModel(application: Application) : AndroidViewModel(application) {
 
     private val backendFactory = ExportBackendFactory(application)
-    private val diagnostics = backendFactory.getDiagnostics()
-    private val mediaCodecCaps = diagnostics.mediaCodecCapabilities
-    private val ffmpegCaps = diagnostics.ffmpegCapabilities
 
     private val _uiState = MutableStateFlow(ExportSettingsUiState())
     val uiState: StateFlow<ExportSettingsUiState> = _uiState.asStateFlow()
@@ -91,19 +88,14 @@ class ExportSettingsViewModel(application: Application) : AndroidViewModel(appli
     private fun validateSettings() {
         val state = _uiState.value
         val settings = state.currentSettings ?: return
-        val codecVal = ExportCodecValidator.validate(settings.codec, settings.container, mediaCodecCaps, ffmpegCaps)
-        val alphaVal = AlphaExportValidator.validate(settings.renderAlpha, settings.codec, settings.container, ffmpegCaps)
-        val hdrVal = HdrExportValidator.validate(settings.exportHDR, settings.colorOutput, settings.codec, mediaCodecCaps, ffmpegCaps)
+        // The exact backend also validates again in the foreground worker. Do not combine generic
+        // codec/HDR/alpha rules here: they can advertise support that the selected backend lacks.
         val backendVal = state.project?.let { backendFactory.validateWithAvailableBackend(settings, it) }
-
-        val allErrors = codecVal.unsupportedFeatures + alphaVal.unsupportedFeatures + hdrVal.unsupportedFeatures +
-            backendVal?.unsupportedFeatures.orEmpty()
-        val allWarnings = codecVal.warnings + alphaVal.warnings + hdrVal.warnings + backendVal?.warnings.orEmpty()
-        val validationResult = ExportValidationResult(
-            isValid = allErrors.isEmpty(),
-            unsupportedFeatures = allErrors.distinct(),
-            warnings = allWarnings.distinct(),
-            errorMessage = allErrors.firstOrNull()
+        val validationResult = backendVal ?: ExportValidationResult(
+            isValid = false,
+            unsupportedFeatures = listOf("Select a project before exporting."),
+            warnings = emptyList(),
+            errorMessage = "Select a project before exporting."
         )
 
         val project = state.project

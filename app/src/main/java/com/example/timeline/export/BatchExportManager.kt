@@ -144,25 +144,33 @@ object BatchExportManager {
         var shouldAdvanceQueue = false
 
         try {
-            val validationErrors = com.example.timeline.export.validation.ExportValidator
-                .validate(serviceContext, project, settings)
-            if (validationErrors.isNotEmpty()) {
-                val errorMsg = "Validation failed:\n" + validationErrors.joinToString("\n") { it.message }
+            val factory = ExportBackendFactory(serviceContext)
+            val selector = ExportBackendSelector(factory)
+            val backend = selector.selectOptimalBackend(settings, project)
+            if (backend == null) {
+                val validation = factory.validateWithAvailableBackend(settings, project)
+                val details = validation.unsupportedFeatures.joinToString("\n")
+                    .ifBlank { validation.errorMessage ?: "No compatible real export backend is available for this edit." }
+                val errorMsg = "Export validation failed:\n$details"
                 ExportProgressRepository.updateState(ExportState.Error(errorMsg))
                 ExportNotification.showErrorNotification(serviceContext, "Export Validation Failed")
                 shouldAdvanceQueue = true
                 return
             }
-
-            val factory = ExportBackendFactory(serviceContext)
-            val selector = ExportBackendSelector(factory)
-            val backend = selector.selectOptimalBackend(settings, project)
-                ?: throw IllegalArgumentException(
-                    factory.validateWithAvailableBackend(settings, project).errorMessage
-                        ?: "No compatible real export backend is available for this edit."
-                )
             selectedBackend = backend
             currentBackend = backend
+
+            // Backend constraints are shared with ExportSettingsViewModel. These remaining checks
+            // are runtime-only source accessibility and free-space checks, not generic codec rules.
+            val validationErrors = com.example.timeline.export.validation.ExportValidator
+                .validate(serviceContext, project, settings)
+            if (validationErrors.isNotEmpty()) {
+                val errorMsg = "Export preparation failed:\n" + validationErrors.joinToString("\n") { it.message }
+                ExportProgressRepository.updateState(ExportState.Error(errorMsg))
+                ExportNotification.showErrorNotification(serviceContext, "Export Preparation Failed")
+                shouldAdvanceQueue = true
+                return
+            }
 
             val job = ExportJob(
                 jobId = jobId,

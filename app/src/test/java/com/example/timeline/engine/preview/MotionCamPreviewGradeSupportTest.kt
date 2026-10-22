@@ -128,4 +128,26 @@ class MotionCamPreviewGradeSupportTest {
         assertFalse(MotionCamPreviewGradeSupport.hasNativePreviewAdjustments(params))
         assertNull(MotionCamPreviewGradeSupport.nativeGradeParams(params))
     }
+
+    @Test
+    fun curvesAloneAreNotReportedAsNativeMotionCamAdjustments() {
+        val params = VideoAdjustmentParams.default().copy(
+            curves = com.example.model.colorgrade.CurveParams(
+                masterPoints = listOf(
+                    com.example.model.colorgrade.CurvePoint(0f, 0f),
+                    com.example.model.colorgrade.CurvePoint(0.5f, 0.8f),
+                    com.example.model.colorgrade.CurvePoint(1f, 1f)
+                )
+            )
+        )
+
+        assertFalse(MotionCamPreviewGradeSupport.hasNativePreviewAdjustments(params))
+        assertNull(MotionCamPreviewGradeSupport.nativeGradeParams(params))
+        assertFalse(
+            MotionCamPreviewGradeSupport.hasNativeGradeChanged(
+                VideoAdjustmentParams.default(),
+                params
+            )
+        )
+    }
 }

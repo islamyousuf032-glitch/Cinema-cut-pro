@@ -33,8 +33,10 @@ class MotionCamRawPreviewEngine(private val context: Context) : PreviewEngine {
         canPlayMovingVideo = true,
         canScrub = true,
         canRenderFirstFrame = true,
-        canApplyRealtimeColorGrade = false,
-        canApplyBasicAdjustments = false,
+        // Exposure, white balance, primary wheels, and viewport brightness/contrast/saturation are
+        // rendered live; the color-grading screen calls out curves/HSL/LUT and advanced gaps.
+        canApplyRealtimeColorGrade = true,
+        canApplyBasicAdjustments = true,
         canUseProxy = false,
         supports10Bit = false,
         supportsHDR = false,
