@@ -507,8 +507,17 @@ class Media3TransformerBackend(context: Context) : ExportBackend {
             if (clip.volume != 1f && !track.isMuted) {
                 errors += "Per-clip volume changes are not supported by this export path yet."
             }
-            errors += Media3ClipAdjustmentSupport.validationErrors(clip.adjustments)
-            if (hasEnabledGrade(clip.colorGrade) || hasEnabledColorLayers(clip.colorLayers)) {
+            val effectiveAdjustmentParams = effectiveAdjustmentParams(clip)
+            if (clip.adjustments.enabled) {
+                errors += Media3ClipAdjustmentSupport.validationErrors(
+                    clip.adjustments.copy(params = effectiveAdjustmentParams)
+                )
+            } else if (clip.colorGrade.enabled && clip.colorGrade.curves != CurveParams()) {
+                errors += Media3ClipAdjustmentSupport.validationErrors(
+                    VideoAdjustmentParams.default().copy(curves = effectiveAdjustmentParams.curves)
+                )
+            }
+            if (hasEnabledGrade(clip.colorGrade) || hasEnabledColorLayers(clip.colorLayers, clip.colorGrade)) {
                 errors += "Clip color grades and LUT layers are not supported by this export path yet."
             }
 
@@ -609,8 +618,11 @@ class Media3TransformerBackend(context: Context) : ExportBackend {
                 sourceUri = sourceUri,
                 startPositionUs = framesToUs(timelineClip.sourceIn, projectFps),
                 endPositionUs = framesToUs(timelineClip.sourceOut, projectFps),
-                adjustmentParams = timelineClip.adjustments.params.takeIf {
-                    Media3ClipAdjustmentSupport.hasRenderableAdjustments(timelineClip.adjustments)
+                adjustmentParams = effectiveAdjustmentParams(timelineClip).takeIf { params ->
+                    val gradeCurvesEnabled = timelineClip.colorGrade.enabled &&
+                        timelineClip.colorGrade.curves != CurveParams()
+                    (timelineClip.adjustments.enabled || gradeCurvesEnabled) &&
+                        Media3ClipAdjustmentSupport.hasRenderableAdjustments(params)
                 }
             )
         }
@@ -626,6 +638,17 @@ class Media3TransformerBackend(context: Context) : ExportBackend {
             outputFrameCount = outputFrames,
             includeAudio = includeAudio
         )
+    }
+
+    private fun effectiveAdjustmentParams(clip: TimelineClip): VideoAdjustmentParams {
+        val gradeCurves = clip.colorGrade.curves
+        val useGradeCurves = clip.colorGrade.enabled && gradeCurves != CurveParams()
+        val params = if (clip.adjustments.enabled) {
+            clip.adjustments.params
+        } else {
+            VideoAdjustmentParams.default()
+        }
+        return params.copy(curves = if (useGradeCurves) gradeCurves else params.curves)
     }
 
     private fun hasVideoEncoder(settings: ExportSettings): Boolean {
@@ -700,10 +723,10 @@ class Media3TransformerBackend(context: Context) : ExportBackend {
     private fun hasEnabledGrade(grade: ColorGradeStack): Boolean = grade.enabled &&
         (grade.opacity != 1f || grade.blendMode != "NORMAL" || grade.keyframes.isNotEmpty() ||
             grade.inputTransform != LogTransformParams() ||
-            // Basic primary corrections are mirrored into VideoAdjustmentParams by the editor and
-            // are rendered by Media3ClipAdjustmentSupport. Unsupported wheel values are rejected
-            // by that validator instead of blocking otherwise-exportable primary corrections.
-            grade.curves != CurveParams() || hasExportUnsupportedQualifier(grade.hslAdjustments) ||
+            // Basic primary corrections and curves are mirrored into VideoAdjustmentParams by the
+            // editor and rendered by the shared GPU effect. Unsupported wheel values are rejected
+            // by the clip-adjustment validator rather than silently discarded.
+            hasExportUnsupportedQualifier(grade.hslAdjustments) ||
             grade.selectiveColor != SelectiveColorParams() ||
             grade.lutStack != LutGradeParams() || grade.colorMatch != ColorMatchParams() ||
             grade.skinToneProtection != SkinToneProtectionParams() || grade.hdrToneMapping != HdrToneMappingParams())
@@ -712,11 +735,24 @@ class Media3TransformerBackend(context: Context) : ExportBackend {
         (params.showMatte || params.hueShift != 0f || params.saturation != 1f || params.luminance != 0f ||
             params.contrast != 0f || params.temperature != 0f || params.tint != 0f)
 
-    private fun hasEnabledColorLayers(stack: ColorGradeLayerStack): Boolean {
+    private fun hasEnabledColorLayers(stack: ColorGradeLayerStack, clipGrade: ColorGradeStack): Boolean {
         if (!stack.enabled) return false
-        return stack.layers.any { layer ->
-            layer.enabled && (layer.type != ColorLayerType.PRIMARY_CORRECTION || layer.opacity != 1f || hasEnabledGrade(layer.grade))
-        } || stack.layers.count { it.enabled } > 1
+        val enabledLayers = stack.layers.filter { it.enabled }
+        if (enabledLayers.size == 1) {
+            val onlyLayer = enabledLayers.single()
+            // The grading editor mirrors its active single primary node onto the clip grade;
+            // render it once through the shared effect, not once per stored representation.
+            if (onlyLayer.type == ColorLayerType.PRIMARY_CORRECTION && onlyLayer.opacity == 1f &&
+                onlyLayer.grade == clipGrade
+            ) return false
+        }
+        return enabledLayers.size > 1 || enabledLayers.any { layer ->
+                layer.type != ColorLayerType.PRIMARY_CORRECTION || layer.opacity != 1f ||
+                hasEnabledGrade(layer.grade) ||
+                (layer.grade.enabled && (
+                    layer.grade.primaryCorrections != ColorGradeParams() || layer.grade.curves != CurveParams()
+                ))
+        }
     }
 
     private fun frameRatesMatch(sourceRate: FrameRate, exportRate: com.example.timeline.export.model.ExportFrameRate): Boolean {

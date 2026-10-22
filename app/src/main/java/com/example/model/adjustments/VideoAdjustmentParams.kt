@@ -1,5 +1,6 @@
 package com.example.model.adjustments
 
+import com.example.model.colorgrade.CurveParams
 import kotlinx.serialization.Serializable
 
 @Serializable
@@ -73,6 +74,9 @@ data class VideoAdjustmentParams(
     val hslSat: FloatArray? = null,
     val hslLum: FloatArray? = null,
 
+    // Master, RGB, luma, and hue/saturation curves are rendered by the Media3 GPU effect.
+    val curves: CurveParams = CurveParams(),
+
     // LUT
     val lutId: String? = null,
     val lutIntensity: Float = 1f,
@@ -138,7 +142,7 @@ data class VideoAdjustmentParams(
             redChannelMultiplier != 1f || greenChannelMultiplier != 1f || blueChannelMultiplier != 1f ||
             redOffset != 0f || greenOffset != 0f || blueOffset != 0f ||
             hslHue?.any { it != 0f } == true || hslSat?.any { it != 0f } == true ||
-            hslLum?.any { it != 0f } == true
+            hslLum?.any { it != 0f } == true || curves != CurveParams()
         ) return true
 
         val mixer = rgbChannelMixer ?: return false
@@ -233,6 +237,7 @@ data class VideoAdjustmentParams(
             if (other.hslLum == null) return false
             if (!hslLum.contentEquals(other.hslLum)) return false
         } else if (other.hslLum != null) return false
+        if (curves != other.curves) return false
 
         if (redChannelMultiplier != other.redChannelMultiplier) return false
         if (greenChannelMultiplier != other.greenChannelMultiplier) return false
@@ -316,6 +321,7 @@ data class VideoAdjustmentParams(
         result = 31 * result + (hslHue?.contentHashCode() ?: 0)
         result = 31 * result + (hslSat?.contentHashCode() ?: 0)
         result = 31 * result + (hslLum?.contentHashCode() ?: 0)
+        result = 31 * result + curves.hashCode()
         result = 31 * result + redChannelMultiplier.hashCode()
         result = 31 * result + greenChannelMultiplier.hashCode()
         result = 31 * result + blueChannelMultiplier.hashCode()

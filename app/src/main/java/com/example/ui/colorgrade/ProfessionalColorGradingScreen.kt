@@ -269,10 +269,11 @@ Box(
                     }
                 }
                 1 -> {
-                    // Curves are persisted but aren't yet connected to the live preview or export renderer.
+                    // Curve LUTs are rendered by the Media3 preview/export shader. Separate multi-node
+                    // grades and non-SDR exports are still rejected by the export validator.
                     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         Text(
-                            text = "Curve controls are saved to the grade, but curve rendering is not yet implemented in live preview or MP4 export.",
+                            text = "Curves update the live preview and are supported in SDR H.264/MP4 export. Separate multi-node grades and unsupported export settings are checked before rendering.",
                             color = MaterialTheme.colorScheme.tertiary,
                             style = MaterialTheme.typography.bodySmall
                         )

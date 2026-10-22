@@ -43,4 +43,39 @@ object PrimaryWheelAdjustmentMapper {
             tint = grade.tint
         )
     }
+
+    /**
+     * Applies only primary-grade fields that actually changed. Other grade controls (such as
+     * curves) must not reset unrelated values already stored in the shared adjustment params.
+     * If an older project has a non-neutral grade but neutral mirrored params, this also fills
+     * in the missing mirrored values once.
+     */
+    fun applyChanges(
+        base: VideoAdjustmentParams,
+        previousGrade: ColorGradeParams,
+        newGrade: ColorGradeParams
+    ): VideoAdjustmentParams {
+        val defaults = VideoAdjustmentParams.default()
+        val previous = apply(defaults, previousGrade)
+        val next = apply(defaults, newGrade)
+
+        fun <T> choose(existing: T, previousValue: T, newValue: T, neutralValue: T): T = when {
+            previousValue != newValue -> newValue
+            existing == neutralValue && newValue != neutralValue -> newValue
+            else -> existing
+        }
+
+        return base.copy(
+            lift = choose(base.lift, previous.lift, next.lift, defaults.lift),
+            gamma = choose(base.gamma, previous.gamma, next.gamma, defaults.gamma),
+            gain = choose(base.gain, previous.gain, next.gain, defaults.gain),
+            offsetWheel = choose(base.offsetWheel, previous.offsetWheel, next.offsetWheel, defaults.offsetWheel),
+            exposureStops = choose(base.exposureStops, previous.exposureStops, next.exposureStops, defaults.exposureStops),
+            contrast = choose(base.contrast, previous.contrast, next.contrast, defaults.contrast),
+            saturation = choose(base.saturation, previous.saturation, next.saturation, defaults.saturation),
+            vibrance = choose(base.vibrance, previous.vibrance, next.vibrance, defaults.vibrance),
+            temperature = choose(base.temperature, previous.temperature, next.temperature, defaults.temperature),
+            tint = choose(base.tint, previous.tint, next.tint, defaults.tint)
+        )
+    }
 }

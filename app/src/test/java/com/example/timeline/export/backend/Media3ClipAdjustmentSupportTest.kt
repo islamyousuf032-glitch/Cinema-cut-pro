@@ -6,6 +6,8 @@ import com.example.model.adjustments.KeyframeInterpolation
 import com.example.model.adjustments.TargetType
 import com.example.model.adjustments.VideoAdjustmentParams
 import com.example.model.adjustments.Vector3
+import com.example.model.colorgrade.CurveParams
+import com.example.model.colorgrade.CurvePoint
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -32,6 +34,24 @@ class Media3ClipAdjustmentSupportTest {
 
         assertTrue(Media3ClipAdjustmentSupport.validationErrors(adjustments).isEmpty())
         assertTrue(Media3ClipAdjustmentSupport.hasRenderableAdjustments(adjustments))
+    }
+
+    @Test
+    fun curvesAreRenderedAndMalformedCurveDataIsRejectedBeforeExport() {
+        val curves = CurveParams().copy(
+            masterPoints = listOf(CurvePoint(0f, 0f), CurvePoint(0.5f, 0.7f), CurvePoint(1f, 1f))
+        )
+        val valid = stack(VideoAdjustmentParams.default().copy(curves = curves))
+        assertTrue(Media3ClipAdjustmentSupport.validationErrors(valid).isEmpty())
+        assertTrue(Media3ClipAdjustmentSupport.hasRenderableAdjustments(valid))
+
+        val invalid = stack(VideoAdjustmentParams.default().copy(
+            curves = CurveParams().copy(masterPoints = listOf(CurvePoint(0f, 0f), CurvePoint(0.5f, 0.4f), CurvePoint(0.5f, 1f)))
+        ))
+        assertTrue(
+            Media3ClipAdjustmentSupport.validationErrors(invalid)
+                .any { it.contains("Color curves cannot be exported") }
+        )
     }
 
     @Test

@@ -45,6 +45,48 @@ class PrimaryWheelAdjustmentMapperTest {
     }
 
     @Test
+    fun primaryGradeUpdatesDoNotResetUnchangedSharedAdjustmentValues() {
+        val base = VideoAdjustmentParams.default().copy(
+            temperature = 0.4f,
+            saturation = 1.6f,
+            contrast = -0.25f
+        )
+        val newGrade = ColorGradeParams(
+            exposure = 0.7f,
+            lift = ColorWheelParams(r = 0.2f),
+            saturation = 1.3f
+        )
+
+        val mapped = PrimaryWheelAdjustmentMapper.applyChanges(
+            base = base,
+            previousGrade = ColorGradeParams(),
+            newGrade = newGrade
+        )
+
+        assertEquals(0.7f, mapped.exposureStops, 0.00001f)
+        assertVector(Vector3(0.2f, 0f, 0f), mapped.lift)
+        assertEquals(1.3f, mapped.saturation, 0.00001f)
+        assertEquals(0.4f, mapped.temperature, 0.00001f)
+    }
+
+    @Test
+    fun nonPrimaryGradeUpdatesPreserveDirectPrimarySettings() {
+        val base = VideoAdjustmentParams.default().copy(
+            temperature = 0.35f,
+            contrast = 0.2f,
+            tint = -0.1f
+        )
+
+        val mapped = PrimaryWheelAdjustmentMapper.applyChanges(
+            base = base,
+            previousGrade = ColorGradeParams(),
+            newGrade = ColorGradeParams()
+        )
+
+        assertEquals(base, mapped)
+    }
+
+    @Test
     fun gammaAndOtherWheelValuesAreClampedToShaderSafeBounds() {
         val grade = ColorGradeParams(
             lift = ColorWheelParams(r = 2f, g = -2f, b = 0f),

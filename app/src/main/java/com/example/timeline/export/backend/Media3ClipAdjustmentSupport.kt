@@ -3,6 +3,7 @@ package com.example.timeline.export.backend
 import com.example.model.adjustments.AdjustmentStack
 import com.example.model.adjustments.VideoAdjustmentParams
 import com.example.model.adjustments.Vector3
+import com.example.model.adjustments.engine.VideoCurveTextureData
 
 /**
  * Defines the deliberately small set of clip adjustments rendered by the Media3 export adapter.
@@ -28,7 +29,8 @@ internal object Media3ClipAdjustmentSupport {
             params.offsetWheel != defaults.offsetWheel ||
             params.sharpness != defaults.sharpness ||
             params.clarity != defaults.clarity ||
-            params.structure != defaults.structure
+            params.structure != defaults.structure ||
+            params.curves != defaults.curves
 
     fun validationErrors(stack: AdjustmentStack): List<String> {
         if (!stack.enabled) return emptyList()
@@ -40,17 +42,26 @@ internal object Media3ClipAdjustmentSupport {
         if (stack.blendMode != "NORMAL" || stack.opacity != 1f) {
             errors += "Clip-adjustment blend modes and opacity are not supported by this export path yet."
         }
+        errors += validationErrors(stack.params)
+        return errors
+    }
 
-        val unsupported = unsupportedAdjustmentNames(stack.params)
+    fun validationErrors(params: VideoAdjustmentParams): List<String> {
+        val errors = mutableListOf<String>()
+        val unsupported = unsupportedAdjustmentNames(params)
         if (unsupported.isNotEmpty()) {
             errors += "This export path does not support these clip adjustments yet: ${unsupported.joinToString()}."
         }
 
-        val invalidValues = invalidSupportedAdjustmentNames(stack.params)
+        val invalidValues = invalidSupportedAdjustmentNames(params)
         if (invalidValues.isNotEmpty()) {
             errors += "Clip-adjustment values are outside their supported ranges: ${invalidValues.joinToString()}."
         }
 
+        val invalidCurves = VideoCurveTextureData.validationErrors(params.curves)
+        if (invalidCurves.isNotEmpty()) {
+            errors += "Color curves cannot be exported: ${invalidCurves.joinToString()}"
+        }
         return errors
     }
 

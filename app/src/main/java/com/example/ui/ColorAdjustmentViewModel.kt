@@ -270,7 +270,8 @@ class ColorAdjustmentViewModel(
                 qualLum = newGrade.hslAdjustments.luminance,
                 qualContrast = newGrade.hslAdjustments.contrast,
                 qualTemp = newGrade.hslAdjustments.temperature,
-                qualTint = newGrade.hslAdjustments.tint
+                qualTint = newGrade.hslAdjustments.tint,
+                curves = if (newGrade.enabled) newGrade.curves else com.example.model.colorgrade.CurveParams()
         )
     }
 
@@ -340,7 +341,11 @@ class ColorAdjustmentViewModel(
             
             // Map ColorGradeStack -> VideoAdjustmentParams to affect GPU preview/export immediately
             val currentParams = oldClip.adjustments.params
-            val wheelParams = PrimaryWheelAdjustmentMapper.apply(currentParams, newGrade.primaryCorrections)
+            val wheelParams = PrimaryWheelAdjustmentMapper.applyChanges(
+                base = currentParams,
+                previousGrade = oldClip.colorGrade.primaryCorrections,
+                newGrade = newGrade.primaryCorrections
+            )
             val newParams = wheelParams.copy(
                 shadowColorBalance = com.example.model.adjustments.Vector3(newGrade.primaryCorrections.shadows.r, newGrade.primaryCorrections.shadows.g, newGrade.primaryCorrections.shadows.b),
                 midtoneColorBalance = com.example.model.adjustments.Vector3(newGrade.primaryCorrections.midtones.r, newGrade.primaryCorrections.midtones.g, newGrade.primaryCorrections.midtones.b),
@@ -374,7 +379,8 @@ class ColorAdjustmentViewModel(
                 qualLum = newGrade.hslAdjustments.luminance,
                 qualContrast = newGrade.hslAdjustments.contrast,
                 qualTemp = newGrade.hslAdjustments.temperature,
-                qualTint = newGrade.hslAdjustments.tint
+                qualTint = newGrade.hslAdjustments.tint,
+                curves = if (newGrade.enabled) newGrade.curves else com.example.model.colorgrade.CurveParams()
             )
             val newAdjustments = oldClip.adjustments.copy(params = newParams)
             

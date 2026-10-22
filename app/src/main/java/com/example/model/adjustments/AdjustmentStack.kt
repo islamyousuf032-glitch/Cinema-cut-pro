@@ -1,5 +1,7 @@
 package com.example.model.adjustments
 
+import com.example.model.colorgrade.CurveParams
+import com.example.model.colorgrade.CurvePoint
 import kotlinx.serialization.Serializable
 import kotlin.math.pow
 import kotlin.reflect.KProperty1
@@ -131,8 +133,78 @@ data class AdjustmentStack(
             // Multipliers
             redChannelMultiplier = this.params.redChannelMultiplier * (1f + ((layerStack.params.redChannelMultiplier - 1f) * alpha)),
             greenChannelMultiplier = this.params.greenChannelMultiplier * (1f + ((layerStack.params.greenChannelMultiplier - 1f) * alpha)),
-            blueChannelMultiplier = this.params.blueChannelMultiplier * (1f + ((layerStack.params.blueChannelMultiplier - 1f) * alpha))
+            blueChannelMultiplier = this.params.blueChannelMultiplier * (1f + ((layerStack.params.blueChannelMultiplier - 1f) * alpha)),
+            curves = blendCurves(this.params.curves, layerStack.params.curves, alpha)
         ).let { AdjustmentValidation.clampAll(it) }
+    }
+
+    private fun blendCurves(base: CurveParams, overlay: CurveParams, opacity: Float): CurveParams {
+        val amount = opacity.coerceIn(0f, 1f)
+        val defaults = CurveParams()
+        return CurveParams(
+            masterPoints = blendCurvePoints(base.masterPoints, overlay.masterPoints, defaults.masterPoints, amount),
+            redPoints = blendCurvePoints(base.redPoints, overlay.redPoints, defaults.redPoints, amount),
+            greenPoints = blendCurvePoints(base.greenPoints, overlay.greenPoints, defaults.greenPoints, amount),
+            bluePoints = blendCurvePoints(base.bluePoints, overlay.bluePoints, defaults.bluePoints, amount),
+            lumaPoints = blendCurvePoints(base.lumaPoints, overlay.lumaPoints, defaults.lumaPoints, amount),
+            hueVsHuePoints = blendCurvePoints(base.hueVsHuePoints, overlay.hueVsHuePoints, defaults.hueVsHuePoints, amount),
+            hueVsSatPoints = blendCurvePoints(base.hueVsSatPoints, overlay.hueVsSatPoints, defaults.hueVsSatPoints, amount),
+            hueVsLumaPoints = blendCurvePoints(base.hueVsLumaPoints, overlay.hueVsLumaPoints, defaults.hueVsLumaPoints, amount),
+            satVsSatPoints = blendCurvePoints(base.satVsSatPoints, overlay.satVsSatPoints, defaults.satVsSatPoints, amount),
+            lumaVsSatPoints = blendCurvePoints(base.lumaVsSatPoints, overlay.lumaVsSatPoints, defaults.lumaVsSatPoints, amount)
+        )
+    }
+
+    private fun blendCurvePoints(
+        base: List<CurvePoint>,
+        overlay: List<CurvePoint>,
+        default: List<CurvePoint>,
+        opacity: Float
+    ): List<CurvePoint> {
+        fun safe(points: List<CurvePoint>): List<CurvePoint> {
+            val sorted = points.asSequence()
+                .filter { it.x.isFinite() && it.y.isFinite() }
+                .map { CurvePoint(it.x.coerceIn(0f, 1f), it.y.coerceIn(0f, 1f)) }
+                .sortedBy { it.x }
+                .take(256)
+                .toList()
+            if (sorted.isEmpty()) return default
+            val unique = ArrayList<CurvePoint>(sorted.size)
+            sorted.forEach { point ->
+                if (unique.lastOrNull()?.x == point.x) unique[unique.lastIndex] = point
+                else unique += point
+            }
+            return unique
+        }
+
+        fun evaluate(points: List<CurvePoint>, x: Float): Float {
+            if (points.size == 1) return points.single().y
+            var left = points.first()
+            if (x <= left.x) return left.y
+            for (index in 1 until points.size) {
+                val right = points[index]
+                if (x <= right.x) {
+                    val position = (x - left.x) / (right.x - left.x).coerceAtLeast(0.0001f)
+                    return left.y + (right.y - left.y) * position
+                }
+                left = right
+            }
+            return points.last().y
+        }
+
+        val basePoints = safe(base)
+        val overlayPoints = safe(overlay)
+        val knots = (listOf(0f, 1f) + basePoints.map { it.x } + overlayPoints.map { it.x })
+            .distinct()
+            .sorted()
+        val sampledKnots = if (knots.size <= 256) knots else List(256) { index ->
+            knots[index * (knots.lastIndex) / 255]
+        }
+        return sampledKnots.map { x ->
+            val baseValue = evaluate(basePoints, x)
+            val overlayValue = evaluate(overlayPoints, x)
+            CurvePoint(x, baseValue + (overlayValue - baseValue) * opacity)
+        }
     }
 
     fun evaluateParamsAtFrame(frame: Long): VideoAdjustmentParams {

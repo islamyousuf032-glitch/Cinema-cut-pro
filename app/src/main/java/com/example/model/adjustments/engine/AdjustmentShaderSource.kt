@@ -100,6 +100,13 @@ object AdjustmentShaderSource {
         uniform float uLutIntensity;
         uniform float uLutSize;
         uniform sampler2D uLutTexture;
+
+        // Curve texture rows: master-composed RGB; luma and hue curves; saturation curves.
+        uniform int uRgbCurvesEnabled;
+        uniform int uLumaCurveEnabled;
+        uniform int uHueCurvesEnabled;
+        uniform int uSaturationCurvesEnabled;
+        uniform sampler2D uCurveTexture;
         
         // HSL Qualifier
         uniform int uQualEnabled;
@@ -275,6 +282,10 @@ object AdjustmentShaderSource {
             return c;
         }
 
+        float curveTextureX(float value) {
+            return (clamp(value, 0.0, 1.0) * 255.0 + 0.5) / 256.0;
+        }
+
         void main() {
             vec4 color = texture2D(texSampler, vTexCoords);
             if (uGradeEnabled == 0) {
@@ -331,6 +342,44 @@ object AdjustmentShaderSource {
             
             // Color Wheels
             rgb = applyColorWheels(rgb, vec3(uLiftR, uLiftG, uLiftB), vec3(uGammaR, uGammaG, uGammaB), vec3(uGainR, uGainG, uGainB), vec3(uOffsetWheelR, uOffsetWheelG, uOffsetWheelB));
+
+            // Match the CPU curve processor: master, per-channel RGB, luma, then hue/saturation.
+            if (uRgbCurvesEnabled == 1) {
+                vec4 redCurve = texture2D(uCurveTexture, vec2(curveTextureX(rgb.r), 0.1666667));
+                vec4 greenCurve = texture2D(uCurveTexture, vec2(curveTextureX(rgb.g), 0.1666667));
+                vec4 blueCurve = texture2D(uCurveTexture, vec2(curveTextureX(rgb.b), 0.1666667));
+                rgb = vec3(redCurve.g, greenCurve.b, blueCurve.a);
+            }
+
+            if (uLumaCurveEnabled == 1) {
+                float lumaBeforeCurve = luminance(rgb);
+                float lumaAfterCurve = texture2D(
+                    uCurveTexture, vec2(curveTextureX(lumaBeforeCurve), 0.5)
+                ).r;
+                if (lumaBeforeCurve > 0.001) rgb *= lumaAfterCurve / lumaBeforeCurve;
+            }
+            rgb = clamp(rgb, 0.0, 1.0);
+
+            if (uHueCurvesEnabled == 1 || uSaturationCurvesEnabled == 1) {
+                vec3 curveHsl = rgb2hsl(clamp(rgb, 0.0, 1.0));
+                float neutralCurveValue = 128.0 / 255.0;
+                if (uHueCurvesEnabled == 1) {
+                    vec4 hueCurves = texture2D(uCurveTexture, vec2(curveTextureX(curveHsl.x), 0.5));
+                    curveHsl.x = fract(curveHsl.x + (hueCurves.g - neutralCurveValue) * 2.0);
+                    vec4 hueSatLumaCurves = texture2D(uCurveTexture, vec2(curveTextureX(curveHsl.x), 0.5));
+                    curveHsl.y += (hueSatLumaCurves.b - neutralCurveValue) * 2.0;
+                    curveHsl.z += (hueSatLumaCurves.a - neutralCurveValue) * 2.0;
+                }
+                if (uSaturationCurvesEnabled == 1) {
+                    vec4 satCurve = texture2D(uCurveTexture, vec2(curveTextureX(curveHsl.y), 0.8333333));
+                    vec4 lumaSatCurve = texture2D(uCurveTexture, vec2(curveTextureX(curveHsl.z), 0.8333333));
+                    curveHsl.y += (satCurve.r - neutralCurveValue) * 2.0;
+                    curveHsl.y += (lumaSatCurve.g - neutralCurveValue) * 2.0;
+                }
+                curveHsl.y = clamp(curveHsl.y, 0.0, 1.0);
+                curveHsl.z = clamp(curveHsl.z, 0.0, 1.0);
+                rgb = hsl2rgb(curveHsl);
+            }
 
             // Clarity / Structure
             if (uClarity != 0.0 || uStructure != 0.0) {

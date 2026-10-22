@@ -1,5 +1,7 @@
 package com.example.model.adjustments
 
+import com.example.model.colorgrade.CurveParams
+import com.example.model.colorgrade.CurvePoint
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -25,6 +27,20 @@ class VideoAdjustmentParamsPreviewTest {
         assertTrue(VideoAdjustmentParams.default().copy(hslHue = floatArrayOf(0.1f)).hasActivePreviewEffect())
         assertTrue(VideoAdjustmentParams.default().copy(qualShowMatte = true).hasActivePreviewEffect())
         assertTrue(VideoAdjustmentParams.default().copy(lutId = "test-lut").hasActivePreviewEffect())
+    }
+
+    @Test
+    fun nonDefaultCurvesEnablePreviewAndParticipateInEqualityAndHashCode() {
+        val defaults = VideoAdjustmentParams.default()
+        val curves = CurveParams().copy(
+            masterPoints = listOf(CurvePoint(0f, 0f), CurvePoint(0.5f, 0.7f), CurvePoint(1f, 1f))
+        )
+        val adjusted = defaults.copy(curves = curves)
+
+        assertTrue(adjusted.hasActivePreviewEffect())
+        assertNotEquals(defaults, adjusted)
+        assertEquals(adjusted, adjusted.copy())
+        assertEquals(adjusted.hashCode(), adjusted.copy().hashCode())
     }
 
     @Test
