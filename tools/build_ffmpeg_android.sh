@@ -126,7 +126,16 @@ cd "${BUILD_DIR}"
   --disable-network \
   --disable-autodetect \
   --enable-jni \
-  --enable-mediacodec
+  --enable-mediacodec \
+  --enable-decoder=h264_mediacodec \
+  --enable-decoder=hevc_mediacodec
+
+for component in JNI MEDIACODEC H264_MEDIACODEC_DECODER HEVC_MEDIACODEC_DECODER; do
+  if ! grep -Eq "^#define CONFIG_${component} 1$" config.h; then
+    echo "Expected FFmpeg Android component was not enabled: ${component}." >&2
+    exit 2
+  fi
+done
 
 if grep -Eq '^CONFIG_(GPL|VERSION3|NONFREE)=yes$' config.mak; then
   echo "Refusing to build: selected FFmpeg configuration enables GPL, version 3, or nonfree code." >&2

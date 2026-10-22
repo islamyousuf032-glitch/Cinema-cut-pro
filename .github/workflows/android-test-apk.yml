@@ -133,8 +133,12 @@ jobs:
       - name: Check optional FFmpeg build script syntax
         run: bash -n tools/build_ffmpeg_android.sh
 
-      - name: Build pinned FFmpeg Android sources (manual verification only)
-        if: github.event_name == 'workflow_dispatch' && inputs.verify_ffmpeg_source_build == true
+      - name: Build pinned FFmpeg Android sources (verification only)
+        if: |
+          (github.event_name == 'workflow_dispatch' && inputs.verify_ffmpeg_source_build == true) ||
+          (github.event_name == 'push' && contains(github.event.head_commit.modified, 'tools/build_ffmpeg_android.sh'))
+        env:
+          FFMPEG_BUILD_JOBS: 2
         run: tools/build_ffmpeg_android.sh
 
       - name: Prepare APK and checksum
