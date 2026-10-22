@@ -649,12 +649,13 @@ class Media3TransformerBackend(context: Context) : ExportBackend {
                         runCatching {
                             val capabilities = codecInfo.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_AVC)
                             val video = capabilities.videoCapabilities ?: return@runCatching false
+                            val encoder = capabilities.encoderCapabilities ?: return@runCatching false
                             video.areSizeAndRateSupported(
                                 query.width,
                                 query.height,
                                 query.frameRate.toDouble()
                             ) && video.bitrateRange.contains(query.bitrate) &&
-                                capabilities.encoderCapabilities.isBitrateModeSupported(query.bitrateMode)
+                                encoder.isBitrateModeSupported(query.bitrateMode)
                         }.getOrDefault(false)
                 }
             }.getOrDefault(false)
