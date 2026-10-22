@@ -133,7 +133,50 @@ jobs:
 
       - name: Build APK for approved test release
         if: ${{ (github.event_name == 'workflow_dispatch' && inputs.publish_test_release == true) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[publish-test-release]')) }}
-        run: ./gradlew --no-daemon --stacktrace :app:assembleDebug
+        id: build_apk
+        shell: bash
+        run: |
+          set -o pipefail
+          ./gradlew --no-daemon --stacktrace :app:assembleDebug 2>&1 | tee apk-assemble.log
+
+      - name: Surface APK assembly failure details
+        if: ${{ failure() && steps.build_apk.outcome == 'failure' }}
+        shell: bash
+        run: |
+          python3 - <<'PYTHON'
+          import os
+          import re
+          from pathlib import Path
+
+          log = Path("apk-assemble.log")
+          if not log.exists():
+              raise SystemExit(0)
+          lines = log.read_text(errors="replace").splitlines()
+          pattern = re.compile(
+              r"FAILURE:|What went wrong:|Execution failed for task|Caused by:|"
+              r"error:|Exception is:|BUILD FAILED|Could not resolve|"
+              r"Duplicate|duplicate|out of memory|No space left|"
+              r"AAPT2|D8|R8|mergeDebug|packageDebug|processDebug",
+              re.IGNORECASE,
+          )
+          matches = [line for line in lines if pattern.search(line)]
+          excerpt = (matches[-60:] if matches else lines[-100:])
+          report = "APK assembly failure details:\n\n```text\n" + "\n".join(excerpt) + "\n```\n"
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write(report)
+          message = "\n".join(excerpt[-24:]) or "Gradle did not produce an APK assembly log."
+          message = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+          print(f"::error title=APK assembly failure::{message}")
+          PYTHON
+
+      - name: Upload APK assembly log on failure
+        if: ${{ failure() && steps.build_apk.outcome == 'failure' }}
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: cinema-cut-pro-apk-build-log-${{ github.run_number }}-${{ github.run_attempt }}
+          path: apk-assemble.log
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Verify bundled third-party license assets in the APK
         if: ${{ (github.event_name == 'workflow_dispatch' && inputs.publish_test_release == true) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[publish-test-release]')) }}
