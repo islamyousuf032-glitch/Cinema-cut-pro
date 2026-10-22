@@ -97,13 +97,42 @@ if [[ ! -x "${CC}" || ! -x "${CXX}" ]]; then
   exit 2
 fi
 
-# Only directories carrying our marker are cleaned on rebuild; never remove an unrelated
-# directory if the caller supplied an unexpected output path.
+# Only directories carrying our marker (or a recognized legacy Gradle-cache layout under the
+# app build directory) are cleaned; never remove unrelated caller-supplied output directories.
 readonly GENERATED_MARKER=".cinema-cut-pro-ffmpeg-generated"
 for generated_dir in "${BUILD_DIR}" "${PREFIX}" "${JNI_LIBS_ROOT}" "${ASSETS_ROOT}"; do
   if [[ -e "${generated_dir}" && ! -f "${generated_dir}/${GENERATED_MARKER}" ]]; then
-    echo "Refusing to remove unmarked output directory: ${generated_dir}." >&2
-    exit 2
+    # Gradle can restore declared task outputs from its build cache without files that were not
+    # declared as outputs. Accept only the exact legacy cache layout under this app build dir.
+    known_gradle_cache_output=false
+    if [[ "${WORK_DIR}" == "${ROOT_DIR}/app/build/ffmpeg-android" ]]; then
+      case "${generated_dir}" in
+        "${PREFIX}")
+          if [[ -d "${PREFIX}/include" && -d "${PREFIX}/lib" ]] && \
+            ! find "${PREFIX}" -mindepth 1 -maxdepth 1 \
+              ! -name include ! -name lib ! -name FFMPEG_BUILD_INFO.txt -print -quit | grep -q .; then
+            known_gradle_cache_output=true
+          fi
+          ;;
+        "${JNI_LIBS_ROOT}")
+          if [[ -d "${JNI_LIBS_DIR}" ]] && \
+            ! find "${JNI_LIBS_ROOT}" -mindepth 1 -maxdepth 1 ! -name arm64-v8a -print -quit | grep -q .; then
+            known_gradle_cache_output=true
+          fi
+          ;;
+        "${ASSETS_ROOT}")
+          if [[ -d "${ASSETS_DIR}" ]] && \
+            ! find "${ASSETS_ROOT}" -mindepth 1 -maxdepth 1 ! -name ffmpeg -print -quit | grep -q .; then
+            known_gradle_cache_output=true
+          fi
+          ;;
+      esac
+    fi
+    if [[ "${known_gradle_cache_output}" != true ]]; then
+      echo "Refusing to remove unmarked output directory: ${generated_dir}." >&2
+      exit 2
+    fi
+    echo "Cleaning a known Gradle-cached FFmpeg output directory: ${generated_dir}."
   fi
 done
 rm -rf "${BUILD_DIR}" "${PREFIX}" "${JNI_LIBS_ROOT}" "${ASSETS_ROOT}"

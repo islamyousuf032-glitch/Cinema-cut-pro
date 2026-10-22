@@ -8,6 +8,9 @@ plugins {
 }
 
 val ffmpegBuildRoot = layout.buildDirectory.dir("ffmpeg-android").get().asFile
+val ffmpegGeneratedMarker = ".cinema-cut-pro-ffmpeg-generated"
+val ffmpegGeneratedOutputMarkers = listOf("build", "prefix", "jniLibs", "assets")
+  .map { directory -> ffmpegBuildRoot.resolve("$directory/$ffmpegGeneratedMarker") }
 val ffmpegLibraries = listOf("avutil", "avcodec", "avformat", "swscale", "swresample")
 val ffmpegBuildOutputs = ffmpegLibraries.flatMap { library ->
   listOf(
@@ -18,7 +21,7 @@ val ffmpegBuildOutputs = ffmpegLibraries.flatMap { library ->
   ffmpegBuildRoot.resolve("prefix/include"),
   ffmpegBuildRoot.resolve("assets/ffmpeg/COPYING.LGPLv2.1"),
   ffmpegBuildRoot.resolve("assets/ffmpeg/FFMPEG_BUILD_INFO.txt")
-)
+) + ffmpegGeneratedOutputMarkers
 val buildFfmpegAndroid by tasks.registering(Exec::class) {
   group = "build"
   description = "Builds the pinned LGPL-only FFmpeg libraries for Android MediaCodec playback."
