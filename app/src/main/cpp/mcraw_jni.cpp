@@ -253,7 +253,8 @@ Java_com_example_timeline_media_NativeMcrawDecoder_nativeGetFrameMetadataJson(
 extern "C" JNIEXPORT jobject JNICALL
 Java_com_example_timeline_media_NativeMcrawDecoder_nativeDecodeFrameToBitmap(
     JNIEnv* env, jobject, const jlong value, const jint index, const jint requestedMaximumEdge,
-    const jfloatArray requestedGradeParams) {
+    const jfloatArray requestedGradeParams,
+    jobject reusableBitmap) {
     DecoderHandle* handle = asHandle(value);
     if (handle == nullptr || handle->decoder == nullptr) {
         throwIoException(env, "MotionCam decoder is closed");
@@ -320,35 +321,44 @@ Java_com_example_timeline_media_NativeMcrawDecoder_nativeDecodeFrameToBitmap(
         }
         const auto& preview = handle->previewBitmap;
 
-        jclass bitmapClass = env->FindClass("android/graphics/Bitmap");
-        jclass configClass = env->FindClass("android/graphics/Bitmap$Config");
-        if (bitmapClass == nullptr || configClass == nullptr) {
-            throw motioncam::IOException("Android Bitmap classes are unavailable");
-        }
-        jfieldID argbField = env->GetStaticFieldID(
-            configClass, "ARGB_8888", "Landroid/graphics/Bitmap$Config;");
-        if (argbField == nullptr) throw motioncam::IOException("ARGB_8888 bitmap configuration is unavailable");
-        jobject config = env->GetStaticObjectField(configClass, argbField);
-        jmethodID createBitmap = env->GetStaticMethodID(
-            bitmapClass,
-            "createBitmap",
-            "(IILandroid/graphics/Bitmap$Config;)Landroid/graphics/Bitmap;");
-        if (createBitmap == nullptr) throw motioncam::IOException("Bitmap.createBitmap is unavailable");
-        jobject bitmap = env->CallStaticObjectMethod(bitmapClass, createBitmap, preview.width, preview.height, config);
-        if (env->ExceptionCheck() || bitmap == nullptr) return nullptr;
-
+        jobject bitmap = reusableBitmap;
         AndroidBitmapInfo bitmapInfo{};
-        if (AndroidBitmap_getInfo(env, bitmap, &bitmapInfo) != ANDROID_BITMAP_RESULT_SUCCESS ||
+        bool needsNewBitmap = bitmap == nullptr ||
+            AndroidBitmap_getInfo(env, bitmap, &bitmapInfo) != ANDROID_BITMAP_RESULT_SUCCESS ||
             bitmapInfo.format != ANDROID_BITMAP_FORMAT_RGBA_8888 ||
             bitmapInfo.width != static_cast<uint32_t>(preview.width) ||
+            bitmapInfo.height != static_cast<uint32_t>(preview.height);
+        if (env->ExceptionCheck()) return nullptr;
+
+        if (needsNewBitmap) {
+            jclass bitmapClass = env->FindClass("android/graphics/Bitmap");
+            jclass configClass = env->FindClass("android/graphics/Bitmap$Config");
+            if (bitmapClass == nullptr || configClass == nullptr) {
+                throw motioncam::IOException("Android Bitmap classes are unavailable");
+            }
+            jfieldID argbField = env->GetStaticFieldID(
+                configClass, "ARGB_8888", "Landroid/graphics/Bitmap$Config;");
+            if (argbField == nullptr) throw motioncam::IOException("ARGB_8888 bitmap configuration is unavailable");
+            jobject config = env->GetStaticObjectField(configClass, argbField);
+            jmethodID createBitmap = env->GetStaticMethodID(
+                bitmapClass,
+                "createBitmap",
+                "(IILandroid/graphics/Bitmap$Config;)Landroid/graphics/Bitmap;");
+            if (createBitmap == nullptr) throw motioncam::IOException("Bitmap.createBitmap is unavailable");
+            bitmap = env->CallStaticObjectMethod(bitmapClass, createBitmap, preview.width, preview.height, config);
+            if (env->ExceptionCheck() || bitmap == nullptr) return nullptr;
+            if (AndroidBitmap_getInfo(env, bitmap, &bitmapInfo) != ANDROID_BITMAP_RESULT_SUCCESS) {
+                throw motioncam::IOException("Android could not inspect the new preview bitmap");
+            }
+        }
+        if (bitmapInfo.format != ANDROID_BITMAP_FORMAT_RGBA_8888 ||
+            bitmapInfo.width != static_cast<uint32_t>(preview.width) ||
             bitmapInfo.height != static_cast<uint32_t>(preview.height)) {
-            env->DeleteLocalRef(bitmap);
             throw motioncam::IOException("Android returned an incompatible preview bitmap");
         }
 
         void* pixels = nullptr;
         if (AndroidBitmap_lockPixels(env, bitmap, &pixels) != ANDROID_BITMAP_RESULT_SUCCESS || pixels == nullptr) {
-            env->DeleteLocalRef(bitmap);
             throw motioncam::IOException("Could not lock preview bitmap pixels");
         }
         for (int y = 0; y < preview.height; ++y) {

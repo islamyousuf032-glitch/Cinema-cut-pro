@@ -29,8 +29,12 @@ internal object NativeMcrawDecoder {
     }
 
     private fun openDescriptor(context: Context, uri: Uri): ParcelFileDescriptor {
-        if (uri.scheme.equals("file", ignoreCase = true)) {
-            val path = uri.path ?: throw IOException("File URI has no path")
+        if (uri.scheme.isNullOrBlank() || uri.scheme.equals("file", ignoreCase = true)) {
+            val path = if (uri.scheme.isNullOrBlank()) {
+                uri.toString()
+            } else {
+                uri.path ?: throw IOException("File URI has no path")
+            }
             val file = File(path)
             if (!file.isFile || !file.canRead()) throw IOException("MotionCam file is not readable")
             return ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
@@ -69,9 +73,18 @@ internal object NativeMcrawDecoder {
         index: Int,
         maximumEdge: Int = 960,
         gradeParams: FloatArray? = null
+    ): Bitmap = decodeFrameInto(handle, index, maximumEdge, gradeParams, reusableBitmap = null)
+
+    /** Reuses a matching ARGB_8888 bitmap so sequential RAW preview frames do not allocate per frame. */
+    fun decodeFrameInto(
+        handle: Long,
+        index: Int,
+        maximumEdge: Int,
+        gradeParams: FloatArray?,
+        reusableBitmap: Bitmap?
     ): Bitmap {
         requireLibrary()
-        return nativeDecodeFrameToBitmap(handle, index, maximumEdge, gradeParams)
+        return nativeDecodeFrameToBitmap(handle, index, maximumEdge, gradeParams, reusableBitmap)
             ?: throw IOException(lastError(handle).ifBlank { "Could not render MotionCam RAW frame" })
     }
 
@@ -121,7 +134,8 @@ internal object NativeMcrawDecoder {
         handle: Long,
         index: Int,
         maximumEdge: Int,
-        gradeParams: FloatArray?
+        gradeParams: FloatArray?,
+        reusableBitmap: Bitmap?
     ): Bitmap?
     private external fun nativeGetAudioSampleRateHz(handle: Long): Int
     private external fun nativeGetAudioChannelCount(handle: Long): Int

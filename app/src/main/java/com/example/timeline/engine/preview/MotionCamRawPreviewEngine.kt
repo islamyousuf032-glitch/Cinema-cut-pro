@@ -50,6 +50,10 @@ class MotionCamRawPreviewEngine(private val context: Context) : PreviewEngine {
     override val firstFrameRendered = _firstFrameRendered.asStateFlow()
     private val _currentBitmap = MutableStateFlow<Bitmap?>(null)
     val currentBitmap = _currentBitmap.asStateFlow()
+    private val _currentFrameRevision = MutableStateFlow(0L)
+    val currentFrameRevision = _currentFrameRevision.asStateFlow()
+    private val previewBitmapBuffers = arrayOfNulls<Bitmap>(2)
+    @Volatile private var lastPublishedBitmapBuffer = -1
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val decoderMutex = Mutex()
@@ -127,7 +131,7 @@ class MotionCamRawPreviewEngine(private val context: Context) : PreviewEngine {
         if (uriChanged || !_firstFrameRendered.value) {
             _currentState.value = PreviewState.LOADING
             _firstFrameRendered.value = false
-            if (uriChanged) _currentBitmap.value = null
+            if (uriChanged) clearPreviewFrame()
         }
 
         loadJob = scope.launch {
@@ -147,7 +151,7 @@ class MotionCamRawPreviewEngine(private val context: Context) : PreviewEngine {
                     }
                 }
                 if (released || requestedUri != uriString) return@launch
-                _currentBitmap.value = frame
+                publishFrame(frame)
                 _firstFrameRendered.value = true
                 _currentError.value = null
                 val shouldResume = resumePlayback && playWhenReady
@@ -189,10 +193,9 @@ class MotionCamRawPreviewEngine(private val context: Context) : PreviewEngine {
                 } ?: return@launch
 
                 if (released || requestedUri != uriString || playbackJob?.isActive == true || playWhenReady) {
-                    bitmap.recycle()
                     return@launch
                 }
-                _currentBitmap.value = bitmap
+                publishFrame(bitmap)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
@@ -233,12 +236,31 @@ class MotionCamRawPreviewEngine(private val context: Context) : PreviewEngine {
         index: Int,
         maximumEdge: Int = STILL_MAX_EDGE,
         params: VideoAdjustmentParams = previewAdjustmentParams
-    ): Bitmap = NativeMcrawDecoder.decodeFrame(
-        handle = handle,
-        index = index,
-        maximumEdge = maximumEdge,
-        gradeParams = MotionCamPreviewGradeSupport.nativeGradeParams(params)
-    )
+    ): Bitmap {
+        val bufferIndex = if (lastPublishedBitmapBuffer == 0) 1 else 0
+        val bitmap = NativeMcrawDecoder.decodeFrameInto(
+            handle = handle,
+            index = index,
+            maximumEdge = maximumEdge,
+            gradeParams = MotionCamPreviewGradeSupport.nativeGradeParams(params),
+            reusableBitmap = previewBitmapBuffers[bufferIndex]
+        )
+        previewBitmapBuffers[bufferIndex] = bitmap
+        return bitmap
+    }
+
+    /** StateFlow uses value equality, so a separate revision makes reused Bitmap writes observable. */
+    private fun publishFrame(bitmap: Bitmap) {
+        lastPublishedBitmapBuffer = previewBitmapBuffers.indexOfFirst { it === bitmap }
+        _currentBitmap.value = bitmap
+        _currentFrameRevision.value += 1L
+    }
+
+    private fun clearPreviewFrame() {
+        lastPublishedBitmapBuffer = -1
+        _currentBitmap.value = null
+        _currentFrameRevision.value += 1L
+    }
 
     /** Uses source timestamps as a wall-clock target and skips missed frames instead of slowing the clip. */
     private fun startPlaybackLoop() {
@@ -292,7 +314,7 @@ class MotionCamRawPreviewEngine(private val context: Context) : PreviewEngine {
                         }
                     }
                     if (released) return@launch
-                    _currentBitmap.value = frameAndTime.first
+                    publishFrame(frameAndTime.first)
                     _firstFrameRendered.value = true
                     onTimeChanged?.invoke(frameAndTime.second)
                 } catch (cancelled: CancellationException) {
@@ -367,7 +389,7 @@ class MotionCamRawPreviewEngine(private val context: Context) : PreviewEngine {
         pausedGradeRefreshJob?.cancel()
         pausedGradeRefreshJob = null
         pause()
-        _currentBitmap.value = null
+        clearPreviewFrame()
         _currentError.value = null
         _currentState.value = PreviewState.IDLE
         _firstFrameRendered.value = false
@@ -379,6 +401,8 @@ class MotionCamRawPreviewEngine(private val context: Context) : PreviewEngine {
                 handle = 0L
                 openedUri = null
                 frameTimestampsNs = LongArray(0)
+                previewBitmapBuffers.fill(null)
+                lastPublishedBitmapBuffer = -1
             }
         }
     }
@@ -398,11 +422,13 @@ class MotionCamRawPreviewEngine(private val context: Context) : PreviewEngine {
                 handle = 0L
                 openedUri = null
                 frameTimestampsNs = LongArray(0)
+                previewBitmapBuffers.fill(null)
+                lastPublishedBitmapBuffer = -1
             }
             cleanupScope.cancel()
         }
         scope.cancel()
-        _currentBitmap.value = null
+        clearPreviewFrame()
         _currentState.value = PreviewState.IDLE
         _firstFrameRendered.value = false
     }

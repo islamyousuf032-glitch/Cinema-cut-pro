@@ -5,8 +5,9 @@ import com.example.model.adjustments.WhiteBalanceTemperature
 
 /**
  * Maps the RAW preview's supported grading parameters to a compact JNI payload. Bayer rendering
- * applies this grade while it creates the preview bitmap, avoiding per-frame Bitmap copies and
- * multiple full-frame JNI passes. Brightness/contrast/saturation remain in the viewport color filter.
+ * applies this grade in the native renderer and the playback engine reuses two Bitmap buffers,
+ * avoiding per-frame Bitmap allocations and extra full-frame JNI passes. Brightness/contrast/
+ * saturation remain in the viewport color filter.
  */
 internal object MotionCamPreviewGradeSupport {
     fun hasNativePreviewAdjustments(params: VideoAdjustmentParams): Boolean =
