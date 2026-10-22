@@ -100,6 +100,9 @@ fi
 # Only directories carrying our marker (or a recognized legacy Gradle-cache layout under the
 # app build directory) are cleaned; never remove unrelated caller-supplied output directories.
 readonly GENERATED_MARKER=".cinema-cut-pro-ffmpeg-generated"
+is_empty_directory() {
+  [[ -d "$1" ]] && [[ -z "$(find "$1" -mindepth 1 -maxdepth 1 -print -quit)" ]]
+}
 for generated_dir in "${BUILD_DIR}" "${PREFIX}" "${JNI_LIBS_ROOT}" "${ASSETS_ROOT}"; do
   if [[ -e "${generated_dir}" && ! -f "${generated_dir}/${GENERATED_MARKER}" ]]; then
     # Gradle can restore declared task outputs from its build cache without files that were not
@@ -107,22 +110,30 @@ for generated_dir in "${BUILD_DIR}" "${PREFIX}" "${JNI_LIBS_ROOT}" "${ASSETS_ROO
     known_gradle_cache_output=false
     if [[ "${WORK_DIR}" == "${ROOT_DIR}/app/build/ffmpeg-android" ]]; then
       case "${generated_dir}" in
+        "${BUILD_DIR}")
+          if is_empty_directory "${BUILD_DIR}"; then
+            known_gradle_cache_output=true
+          fi
+          ;;
         "${PREFIX}")
-          if [[ -d "${PREFIX}/include" && -d "${PREFIX}/lib" ]] && \
-            ! find "${PREFIX}" -mindepth 1 -maxdepth 1 \
-              ! -name include ! -name lib ! -name FFMPEG_BUILD_INFO.txt -print -quit | grep -q .; then
+          if is_empty_directory "${PREFIX}" || \
+            { [[ -d "${PREFIX}/include" && -d "${PREFIX}/lib" ]] && \
+              ! find "${PREFIX}" -mindepth 1 -maxdepth 1 \
+                ! -name include ! -name lib ! -name FFMPEG_BUILD_INFO.txt -print -quit | grep -q .; }; then
             known_gradle_cache_output=true
           fi
           ;;
         "${JNI_LIBS_ROOT}")
-          if [[ -d "${JNI_LIBS_DIR}" ]] && \
-            ! find "${JNI_LIBS_ROOT}" -mindepth 1 -maxdepth 1 ! -name arm64-v8a -print -quit | grep -q .; then
+          if is_empty_directory "${JNI_LIBS_ROOT}" || \
+            { [[ -d "${JNI_LIBS_DIR}" ]] && \
+              ! find "${JNI_LIBS_ROOT}" -mindepth 1 -maxdepth 1 ! -name arm64-v8a -print -quit | grep -q .; }; then
             known_gradle_cache_output=true
           fi
           ;;
         "${ASSETS_ROOT}")
-          if [[ -d "${ASSETS_DIR}" ]] && \
-            ! find "${ASSETS_ROOT}" -mindepth 1 -maxdepth 1 ! -name ffmpeg -print -quit | grep -q .; then
+          if is_empty_directory "${ASSETS_ROOT}" || \
+            { [[ -d "${ASSETS_DIR}" ]] && \
+              ! find "${ASSETS_ROOT}" -mindepth 1 -maxdepth 1 ! -name ffmpeg -print -quit | grep -q .; }; then
             known_gradle_cache_output=true
           fi
           ;;
