@@ -52,6 +52,7 @@ class StillFramePreviewEngine(private val context: Context) : PreviewEngine {
     private var cachedTimeMs: Long = -1L
 
     override var onTimeChanged: ((Long) -> Unit)? = null
+    override var onPlaybackEnded: (() -> Unit)? = null
 
     private val scope = CoroutineScope(Dispatchers.Main + Job())
     private var renderJob: Job? = null
@@ -96,6 +97,11 @@ class StillFramePreviewEngine(private val context: Context) : PreviewEngine {
             }
         }
         
+        renderFrame()
+    }
+
+    override fun updatePreviewGrade(evaluatedParams: VideoAdjustmentParams) {
+        currentParams = evaluatedParams
         renderFrame()
     }
 
@@ -215,6 +221,8 @@ class StillFramePreviewEngine(private val context: Context) : PreviewEngine {
     }
 
     override fun release() {
+        onTimeChanged = null
+        onPlaybackEnded = null
         renderJob?.cancel()
         surface = null
         cachedSourceBitmap?.recycle()

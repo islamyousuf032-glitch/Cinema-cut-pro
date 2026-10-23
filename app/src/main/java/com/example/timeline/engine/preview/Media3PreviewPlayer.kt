@@ -74,6 +74,7 @@ class Media3FallbackPreviewEngine(context: Context) : PreviewEngine {
     private val released = AtomicBoolean(false)
 
     override var onTimeChanged: ((Long) -> Unit)? = null
+    override var onPlaybackEnded: (() -> Unit)? = null
 
     private var timeTrackerJob: kotlinx.coroutines.Job? = null
     private var pausedGradeRefreshJob: kotlinx.coroutines.Job? = null
@@ -128,6 +129,7 @@ class Media3FallbackPreviewEngine(context: Context) : PreviewEngine {
                         _currentState.value = PreviewState.PLAYING
                         onTimeChanged?.invoke(exoPlayer.currentPosition * 1000L)
                         _currentState.value = PreviewState.READY
+                        onPlaybackEnded?.invoke()
                     }
                     Player.STATE_IDLE -> {
                         if (exoPlayer.playerError != null) {
@@ -412,6 +414,16 @@ class Media3FallbackPreviewEngine(context: Context) : PreviewEngine {
         }
     }
 
+    override fun updatePreviewGrade(evaluatedParams: VideoAdjustmentParams) {
+        if (released.get()) return
+        latestEvaluatedParams = evaluatedParams
+        val uri = currentUri ?: return
+        updateVideoEffects(uri, currentMimeType, evaluatedParams)
+        if (!exoPlayer.isPlaying && videoEffectsActive && exoPlayer.playbackState == Player.STATE_READY) {
+            requestPausedGradeRefresh()
+        }
+    }
+
     override fun loadMedia(
         uriString: String,
         useProxy: Boolean,
@@ -555,6 +567,8 @@ class Media3FallbackPreviewEngine(context: Context) : PreviewEngine {
 
     override fun release() {
         if (!released.compareAndSet(false, true)) return
+        onTimeChanged = null
+        onPlaybackEnded = null
         cancelPausedGradeRefresh()
         stopTimeTracker()
         scope.cancel()

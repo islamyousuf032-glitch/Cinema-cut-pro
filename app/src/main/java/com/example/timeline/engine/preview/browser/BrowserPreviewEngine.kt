@@ -44,6 +44,7 @@ class BrowserPreviewEngine(val context: Context) : PreviewEngine {
     private var _durationUs = 0L
     
     override var onTimeChanged: ((Long) -> Unit)? = null
+    override var onPlaybackEnded: (() -> Unit)? = null
 
     init {
         if (com.example.BuildConfig.DEBUG) {
@@ -122,7 +123,13 @@ class BrowserPreviewEngine(val context: Context) : PreviewEngine {
                 "canplay" -> { _currentState.value = PreviewState.READY }
                 "playing" -> { _isPlaying = true; _currentState.value = PreviewState.PLAYING }
                 "pause" -> { _isPlaying = false; _currentState.value = PreviewState.READY }
-                "ended" -> { _isPlaying = false; _currentState.value = PreviewState.READY }
+                "ended" -> {
+                    _isPlaying = false
+                    _currentPositionUs = _durationUs
+                    _currentState.value = PreviewState.READY
+                    onTimeChanged?.invoke(_currentPositionUs)
+                    onPlaybackEnded?.invoke()
+                }
             }
         }
     }
@@ -203,6 +210,8 @@ class BrowserPreviewEngine(val context: Context) : PreviewEngine {
     }
 
     override fun release() {
+        onTimeChanged = null
+        onPlaybackEnded = null
         Handler(Looper.getMainLooper()).post {
             webView.destroy()
         }

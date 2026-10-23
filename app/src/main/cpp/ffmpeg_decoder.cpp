@@ -33,6 +33,8 @@ extern "C" {
 namespace {
 
 constexpr int kIoBufferBytes = 64 * 1024;
+constexpr int kMaxSoftwarePreviewEdge = 1920;
+constexpr int64_t kLateFrameDropThresholdNs = 80'000'000LL;
 constexpr int64_t kNoTimestamp = AV_NOPTS_VALUE;
 
 struct FfmpegPreview {
@@ -55,6 +57,8 @@ struct FfmpegPreview {
     int64_t positionUs = 0;
     int windowWidth = 0;
     int windowHeight = 0;
+    int surfaceMaxWidth = 0;
+    int surfaceMaxHeight = 0;
     int64_t discardBeforeUs = 0;
     int64_t clockMediaStartUs = 0;
     int64_t clockWallStartNs = 0;
@@ -317,6 +321,14 @@ FrameRenderOutcome waitForFrameTime(FfmpegPreview& preview, const int64_t frameU
         return preview.stop || preview.seekRequested || (playing && !preview.playing);
     };
 
+    // Keep real-time playback close to the media clock instead of displaying a growing queue of
+    // stale frames on slower devices. VLC/Media3 also prefer dropping late preview frames to
+    // stalling the whole editor; paused seeks are never dropped.
+    const int64_t nowNs = monotonicTimeNs();
+    if (playing && targetWallNs < nowNs - kLateFrameDropThresholdNs) {
+        return FrameRenderOutcome::Skipped;
+    }
+
     if (preview.useMediaCodec && preview.frame->format == AV_PIX_FMT_MEDIACODEC) {
         if (wasInterrupted()) return FrameRenderOutcome::Skipped;
         const int64_t nowNs = monotonicTimeNs();
@@ -340,13 +352,28 @@ FrameRenderOutcome waitForFrameTime(FfmpegPreview& preview, const int64_t frameU
     if (wasInterrupted()) return FrameRenderOutcome::Skipped;
 
     if (preview.window == nullptr) return FrameRenderOutcome::Failed;
-    if (preview.windowWidth != preview.frame->width || preview.windowHeight != preview.frame->height) {
+    const int sourceWidth = preview.frame->width;
+    const int sourceHeight = preview.frame->height;
+    if (sourceWidth <= 0 || sourceHeight <= 0) return FrameRenderOutcome::Failed;
+
+    const int availableWidth = preview.surfaceMaxWidth > 0 ? preview.surfaceMaxWidth : 1280;
+    const int availableHeight = preview.surfaceMaxHeight > 0 ? preview.surfaceMaxHeight : 720;
+    const double fitScale = std::min({
+        1.0,
+        static_cast<double>(availableWidth) / sourceWidth,
+        static_cast<double>(availableHeight) / sourceHeight,
+        static_cast<double>(kMaxSoftwarePreviewEdge) / std::max(sourceWidth, sourceHeight)
+    });
+    const int destinationWidth = std::max(1, static_cast<int>(std::lround(sourceWidth * fitScale)));
+    const int destinationHeight = std::max(1, static_cast<int>(std::lround(sourceHeight * fitScale)));
+
+    if (preview.windowWidth != destinationWidth || preview.windowHeight != destinationHeight) {
         if (ANativeWindow_setBuffersGeometry(
-                preview.window, preview.frame->width, preview.frame->height, WINDOW_FORMAT_RGBA_8888) != 0) {
+                preview.window, destinationWidth, destinationHeight, WINDOW_FORMAT_RGBA_8888) != 0) {
             return FrameRenderOutcome::Failed;
         }
-        preview.windowWidth = preview.frame->width;
-        preview.windowHeight = preview.frame->height;
+        preview.windowWidth = destinationWidth;
+        preview.windowHeight = destinationHeight;
     }
     ANativeWindow_Buffer windowBuffer{};
     if (ANativeWindow_lock(preview.window, &windowBuffer, nullptr) != 0 || windowBuffer.bits == nullptr) {
@@ -355,11 +382,11 @@ FrameRenderOutcome waitForFrameTime(FfmpegPreview& preview, const int64_t frameU
 
     preview.scaler = sws_getCachedContext(
         preview.scaler,
-        preview.frame->width,
-        preview.frame->height,
+        sourceWidth,
+        sourceHeight,
         static_cast<AVPixelFormat>(preview.frame->format),
-        preview.frame->width,
-        preview.frame->height,
+        destinationWidth,
+        destinationHeight,
         AV_PIX_FMT_RGBA,
         SWS_BILINEAR,
         nullptr,
@@ -379,11 +406,11 @@ FrameRenderOutcome waitForFrameTime(FfmpegPreview& preview, const int64_t frameU
         preview.frame->data,
         preview.frame->linesize,
         0,
-        preview.frame->height,
+        sourceHeight,
         destination,
         destinationStride);
     const int postResult = ANativeWindow_unlockAndPost(preview.window);
-    return rows > 0 && postResult == 0
+    return rows == destinationHeight && postResult == 0
         ? FrameRenderOutcome::Rendered
         : FrameRenderOutcome::Failed;
 }
@@ -568,6 +595,8 @@ Java_com_example_timeline_media_NativeFfmpegDecoder_nativeOpen(
         throwIoException(env, "FFmpeg could not attach the preview surface");
         return 0;
     }
+    preview->surfaceMaxWidth = std::max(0, ANativeWindow_getWidth(preview->window));
+    preview->surfaceMaxHeight = std::max(0, ANativeWindow_getHeight(preview->window));
 
     uint8_t* ioBuffer = static_cast<uint8_t*>(av_malloc(kIoBufferBytes));
     if (ioBuffer == nullptr) {

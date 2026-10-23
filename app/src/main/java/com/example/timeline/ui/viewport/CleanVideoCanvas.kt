@@ -38,6 +38,12 @@ fun CleanVideoCanvas(
     modifier: Modifier = Modifier
 ) {
     val scope = rememberCoroutineScope()
+    val failureFlow = remember(controller.previewEngine) {
+        controller.previewEngine.currentPlaybackFailure
+            ?: kotlinx.coroutines.flow.MutableStateFlow<com.example.timeline.engine.preview.PreviewPlaybackFailure?>(null)
+    }
+    val playbackFailure by failureFlow.collectAsState()
+    val isVideoEffectFailure = playbackFailure?.isVideoEffectFailure == true
     var activeOverlayMode by remember { mutableStateOf("BoundingBox") }
     var liveTransformOverride by remember { mutableStateOf<ClipTransform?>(null) }
     val effectiveTransform = liveTransformOverride ?: currentClip?.transform ?: ClipTransform()
@@ -95,7 +101,7 @@ fun CleanVideoCanvas(
                 val needsStillFrame = !isMcraw && !isReady && (
                     (requiresProxy && !hasProxy) ||
                         currentAsset.previewStatus == PreviewStatus.DIRECT_FAILED_RUNTIME ||
-                        playerError != null
+                        (playerError != null && !isVideoEffectFailure)
                     )
                 
                 val isDirectFailed = currentAsset.previewStatus == PreviewStatus.DIRECT_FAILED_RUNTIME || (hasProxy && currentAsset.previewStatus == PreviewStatus.NOT_TESTED)

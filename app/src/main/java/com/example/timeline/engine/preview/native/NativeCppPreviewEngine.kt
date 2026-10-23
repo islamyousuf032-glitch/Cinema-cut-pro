@@ -36,6 +36,7 @@ class NativeCppPreviewEngine : PreviewEngine {
     private var surface: Surface? = null
     
     override var onTimeChanged: ((Long) -> Unit)? = null
+    override var onPlaybackEnded: (() -> Unit)? = null
 
     private var timeTrackerJob: kotlinx.coroutines.Job? = null
     private val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main + kotlinx.coroutines.SupervisorJob())
@@ -107,6 +108,8 @@ class NativeCppPreviewEngine : PreviewEngine {
     }
 
     override fun release() {
+        onTimeChanged = null
+        onPlaybackEnded = null
         NativePlayerBridge.nativeRelease(nativeHandle)
         nativeHandle = 0
     }

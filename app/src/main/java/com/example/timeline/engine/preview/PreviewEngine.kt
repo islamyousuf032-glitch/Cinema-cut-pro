@@ -139,6 +139,9 @@ interface PreviewEngine {
     /** Keeps the Media3 grade graph attached while the color panel is open, including at neutral settings. */
     fun setColorGradePreviewMode(enabled: Boolean) = Unit
 
+    /** Updates live effect parameters without seeking or replacing the current source/frame. */
+    fun updatePreviewGrade(evaluatedParams: VideoAdjustmentParams) = Unit
+
     fun loadMedia(
         uriString: String,
         useProxy: Boolean,
@@ -183,4 +186,7 @@ interface PreviewEngine {
 
     /** Callback keeps the timeline synchronized without coupling the player to Compose. */
     var onTimeChanged: ((Long) -> Unit)?
+
+    /** Called once when the current media item reaches end-of-stream. */
+    var onPlaybackEnded: (() -> Unit)?
 }

@@ -72,6 +72,7 @@ class NativeVlcPreviewEngine(
     private var firstFrameWatchdogRunnable: Runnable? = null
 
     override var onTimeChanged: ((Long) -> Unit)? = null
+    override var onPlaybackEnded: (() -> Unit)? = null
 
     /**
      * LibVLC's Android view helper can size a video surface using the host Activity's
@@ -253,6 +254,15 @@ class NativeVlcPreviewEngine(
                     }
                     onTimeChanged?.invoke(event.timeChanged * 1000L)
                 }
+            }
+            MediaPlayer.Event.EndReached -> {
+                cancelPauseAfterFirstFrame()
+                _currentState.value = PreviewState.READY
+                val player = mediaPlayer
+                val finalPositionMs = player?.length?.takeIf { it > 0L } ?: player?.time ?: 0L
+                val finalPositionUs = finalPositionMs.coerceAtLeast(0L) * 1_000L
+                onTimeChanged?.invoke(finalPositionUs)
+                onPlaybackEnded?.invoke()
             }
             MediaPlayer.Event.EncounteredError -> {
                 cancelPauseAfterFirstFrame()
@@ -606,6 +616,8 @@ class NativeVlcPreviewEngine(
     }
 
     override fun release() {
+        onTimeChanged = null
+        onPlaybackEnded = null
         detachFromVideoLayout()
         cancelPauseAfterFirstFrame()
         pendingMediaStart = false

@@ -51,7 +51,7 @@ class TimelinePreviewController(private val context: Context) {
         if (colorGradeBypassed == bypassed) return
         colorGradeBypassed = bypassed
         activeProject?.let { project ->
-            seekToTimelineFrame(project, lastPlayheadFrame, forceSeek = false)
+            previewEngine.updatePreviewGrade(evaluatedPreviewParams(project, lastPlayheadFrame))
         }
     }
 
@@ -88,6 +88,7 @@ class TimelinePreviewController(private val context: Context) {
     /** True only when the engine was actually given the READY proxy URI. */
     val activeSourceIsProxy: StateFlow<Boolean> = _activeSourceIsProxy.asStateFlow()
     private val proxyPlaybackFailedAssetIds = mutableSetOf<String>()
+    private var activePreviewSource: PreviewMediaSource? = null
 
     private fun resolveSource(asset: MediaAsset): PreviewMediaSource? {
         if (asset.proxyStatus != com.example.timeline.media.ProxyStatus.READY || asset.proxyInfo == null) {
@@ -99,6 +100,7 @@ class TimelinePreviewController(private val context: Context) {
             preferProxy = preferProxyPlayback,
             forceOriginal = forceOriginal
         ).also { source ->
+            activePreviewSource = source
             _activeSourceIsProxy.value = source?.isProxy == true
         }
     }
@@ -123,6 +125,8 @@ class TimelinePreviewController(private val context: Context) {
     var onPlayheadAdvanced: ((Long) -> Unit)? = null
     var onPlaybackEnded: (() -> Unit)? = null
     private var pendingBoundaryClipId: String? = null
+    private var handledEndEngine: PreviewEngine? = null
+    private var handledEndClipId: String? = null
 
     private val scope = CoroutineScope(Dispatchers.Main + Job())
     private var playheadJob: Job? = null
@@ -138,54 +142,76 @@ class TimelinePreviewController(private val context: Context) {
 
     private fun setupEngineListeners(engine: PreviewEngine) {
         lastEmittedTimeMs = 0L
-        engine.onTimeChanged = { currentUs ->
-            if (engine.engineType != PreviewEngineType.STILL_FRAME && currentUs >= 0L) {
-                val now = System.currentTimeMillis()
-                val clip = activeClip.value
-                val project = activeProject
-                if (clip != null && project != null) {
-                    val rate = project.settings.getFpsRational()
-                    val fps = rate.numerator.toDouble() / rate.denominator.toDouble()
-                    val sourceInUs = TimelineFrameResolver.convertFrameToMicroseconds(
-                        clip.sourceIn,
-                        rate.numerator,
-                        rate.denominator
-                    )
-                    val offsetUs = currentUs - sourceInUs
-                    val offsetFrames = (offsetUs * fps / 1_000_000.0).toLong()
-                    val projectFrame = clip.timelineStart + offsetFrames
-                    val boundedFrame = projectFrame.coerceIn(clip.timelineStart, clip.timelineEnd - 1)
+        engine.onTimeChanged = timeChanged@{ currentUs ->
+            if (previewEngine !== engine || engine.engineType == PreviewEngineType.STILL_FRAME || currentUs < 0L) {
+                return@timeChanged
+            }
+            val now = System.currentTimeMillis()
+            val clip = activeClip.value ?: return@timeChanged
+            val project = activeProject ?: return@timeChanged
+            val rate = project.settings.getFpsRational()
+            if (rate.numerator <= 0 || rate.denominator <= 0) return@timeChanged
 
-                    if (now - lastEmittedTimeMs >= 30L && boundedFrame != lastPlayheadFrame) {
-                        lastPlayheadFrame = boundedFrame
-                        lastEmittedTimeMs = now
-                        onPlayheadAdvanced?.invoke(boundedFrame)
-                    }
+            val fps = rate.numerator.toDouble() / rate.denominator.toDouble()
+            val sourceInUs = TimelineFrameResolver.convertFrameToMicroseconds(
+                clip.sourceIn,
+                rate.numerator,
+                rate.denominator
+            )
+            val offsetUs = currentUs - sourceInUs
+            val offsetFrames = (offsetUs * fps / 1_000_000.0).toLong()
+            val projectFrame = clip.timelineStart + offsetFrames
+            val boundedFrame = projectFrame.coerceIn(clip.timelineStart, (clip.timelineEnd - 1).coerceAtLeast(clip.timelineStart))
 
-                    val playbackWasActive = engine.isPlaying || engine.currentState.value == PreviewState.PLAYING
-                    if (projectFrame >= clip.timelineEnd && playbackWasActive && pendingBoundaryClipId != clip.id) {
-                        val nextFrame = clip.timelineEnd
-                        val nextClip = TimelineFrameResolver.getTopmostVisibleVideoClip(project, nextFrame)
-                        pendingBoundaryClipId = clip.id
-                        if (nextClip == null) {
-                            engine.pause()
-                            lastPlayheadFrame = clip.timelineEnd - 1
-                            onPlayheadAdvanced?.invoke(lastPlayheadFrame)
-                            onPlaybackEnded?.invoke()
-                            pendingBoundaryClipId = null
-                        } else {
-                            lastPlayheadFrame = nextFrame
-                            onPlayheadAdvanced?.invoke(nextFrame)
-                            scope.launch {
-                                if (previewEngine === engine && activeProject?.id == project.id) {
-                                    seekToTimelineFrame(project, nextFrame)
-                                    if (previewEngine === engine && activeClip.value?.id == nextClip.id) {
-                                        engine.play()
-                                    }
-                                }
-                                pendingBoundaryClipId = null
+            if (now - lastEmittedTimeMs >= 30L && boundedFrame != lastPlayheadFrame) {
+                lastPlayheadFrame = boundedFrame
+                lastEmittedTimeMs = now
+                onPlayheadAdvanced?.invoke(boundedFrame)
+            }
+
+            val playbackWasActive = engine.isPlaying || engine.currentState.value == PreviewState.PLAYING
+            if (projectFrame >= clip.timelineEnd && playbackWasActive) {
+                handlePlaybackBoundary(engine, project, clip)
+            }
+        }
+        engine.onPlaybackEnded = ended@{
+            if (previewEngine !== engine) return@ended
+            val project = activeProject ?: return@ended
+            val clip = activeClip.value ?: run {
+                onPlaybackEnded?.invoke()
+                return@ended
+            }
+            handlePlaybackBoundary(engine, project, clip)
+        }
+    }
+
+    private fun handlePlaybackBoundary(engine: PreviewEngine, project: TimelineProject, clip: TimelineClip) {
+        if (previewEngine !== engine || activeProject?.id != project.id || activeClip.value?.id != clip.id) return
+        if (pendingBoundaryClipId == clip.id || (handledEndEngine === engine && handledEndClipId == clip.id)) return
+        handledEndEngine = engine
+        handledEndClipId = clip.id
+
+        when (val decision = playbackBoundaryDecision(project, clip)) {
+            is PlaybackBoundaryDecision.StopAtLastFrame -> {
+                engine.pause()
+                lastPlayheadFrame = decision.frame
+                onPlayheadAdvanced?.invoke(decision.frame)
+                onPlaybackEnded?.invoke()
+            }
+            is PlaybackBoundaryDecision.AdvanceToNextClip -> {
+                pendingBoundaryClipId = clip.id
+                lastPlayheadFrame = decision.frame
+                onPlayheadAdvanced?.invoke(decision.frame)
+                scope.launch {
+                    try {
+                        if (previewEngine === engine && activeProject?.id == project.id) {
+                            seekToTimelineFrame(project, decision.frame, forceSeek = true)
+                            if (activeProject?.id == project.id && activeClip.value?.id == decision.clip.id) {
+                                previewEngine.play()
                             }
                         }
+                    } finally {
+                        if (pendingBoundaryClipId == clip.id) pendingBoundaryClipId = null
                     }
                 }
             }
@@ -195,6 +221,7 @@ class TimelinePreviewController(private val context: Context) {
     private fun releasePendingEngine(engine: PreviewEngine) {
         if (pendingEngineReleases.remove(engine)) {
             engine.onTimeChanged = null
+            engine.onPlaybackEnded = null
             engine.release()
         }
     }
@@ -280,6 +307,11 @@ class TimelinePreviewController(private val context: Context) {
     }
 
     fun loadProject(project: TimelineProject) {
+        if (activeProject?.id != project.id) {
+            pendingBoundaryClipId = null
+            handledEndEngine = null
+            handledEndClipId = null
+        }
         activeProject = project
     }
 
@@ -298,6 +330,7 @@ class TimelinePreviewController(private val context: Context) {
         if (topClip == null) {
             _activeClip.value = null
             _activeAsset.value = null
+            activePreviewSource = null
             _activeSourceIsProxy.value = false
             val eng = previewEngine
             if (eng is Media3FallbackPreviewEngine) {
@@ -315,6 +348,7 @@ class TimelinePreviewController(private val context: Context) {
         _activeAsset.value = asset
 
         if (asset == null) {
+            activePreviewSource = null
             _activeSourceIsProxy.value = false
             val eng = previewEngine
             if (eng is Media3FallbackPreviewEngine) {
@@ -362,6 +396,8 @@ class TimelinePreviewController(private val context: Context) {
     }
 
     fun play() {
+        handledEndEngine = null
+        handledEndClipId = null
         val clip = _activeClip.value
         if (clip != null && lastPlayheadFrame >= clip.timelineEnd - 1) {
             seekToTimelineFrame(activeProject!!, clip.timelineStart)
@@ -449,6 +485,7 @@ class TimelinePreviewController(private val context: Context) {
         scope.cancel()
         pendingEngineReleases.toList().forEach(::releasePendingEngine)
         previewEngine.onTimeChanged = null
+        previewEngine.onPlaybackEnded = null
         previewEngine.release()
     }
 
@@ -460,14 +497,43 @@ class TimelinePreviewController(private val context: Context) {
         seekToTimelineFrame(project, lastPlayheadFrame)
     }
 
+    private fun updatePreviewForProjectChangeWithoutSeek(project: TimelineProject): Boolean {
+        val previousProject = activeProject ?: return false
+        if (previousProject.id != project.id) return false
+        val previousClip = _activeClip.value ?: return false
+        val previousSource = activePreviewSource
+        val updatedClip = TimelineFrameResolver.getTopmostVisibleVideoClip(project, lastPlayheadFrame)
+            ?: return false
+        val updatedAsset = project.mediaAssets.firstOrNull { it.assetId == updatedClip.mediaId }
+            ?: return false
+        val updatedSource = resolveSource(updatedAsset)
+
+        if (!canUpdatePreviewGradeWithoutSeek(
+                previousClip = previousClip,
+                updatedClip = updatedClip,
+                previousSource = previousSource,
+                updatedSource = updatedSource,
+                previousFrameRate = previousProject.settings.getFpsRational(),
+                updatedFrameRate = project.settings.getFpsRational(),
+                engineType = previewEngine.engineType,
+                updatedAssetIsMcraw = com.example.timeline.media.MotionCamRawFormat.isMcrawAsset(updatedAsset)
+            )
+        ) return false
+
+        activeProject = project
+        _activeClip.value = updatedClip
+        _activeAsset.value = updatedAsset
+        previewEngine.setVolume(updatedClip.volume)
+        previewEngine.updatePreviewGrade(evaluatedPreviewParams(project, lastPlayheadFrame))
+        return true
+    }
+
     fun onProjectChanged(project: TimelineProject) {
         if (activeProject == null || activeProject?.id != project.id) {
             loadProject(project)
             seekToTimelineFrame(project, 0L)
-        } else {
+        } else if (!updatePreviewForProjectChangeWithoutSeek(project)) {
             loadProject(project)
-            // A grade-only project edit should update effect uniforms without disrupting
-            // active playback. Explicit timeline scrubs still use forceSeek=true.
             seekToTimelineFrame(project, lastPlayheadFrame, forceSeek = false)
         }
     }

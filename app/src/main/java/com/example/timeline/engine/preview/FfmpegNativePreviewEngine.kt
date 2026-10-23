@@ -3,6 +3,8 @@ package com.example.timeline.engine.preview
 import android.content.Context
 import android.graphics.SurfaceTexture
 import android.net.Uri
+import android.os.Handler
+import android.os.Looper
 import android.view.Surface
 import android.view.TextureView
 import androidx.media3.common.AudioAttributes
@@ -14,6 +16,7 @@ import com.example.BuildConfig
 import com.example.model.adjustments.VideoAdjustmentParams
 import com.example.timeline.media.NativeFfmpegDecoder
 import java.io.IOException
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -81,6 +84,10 @@ class FfmpegNativePreviewEngine(context: Context) : PreviewEngine {
     private var outputSurface: Surface? = null
     private var ownedSurfaceTexture: SurfaceTexture? = null
     private var attachedTextureView: TextureView? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val surfaceTextureOwners = ConcurrentHashMap<SurfaceTexture, TextureView>()
+    private val pendingTextureReleases = ConcurrentHashMap.newKeySet<SurfaceTexture>()
+    private val releasedTexturesAwaitingViewCleanup = ConcurrentHashMap.newKeySet<SurfaceTexture>()
     private var requestedPositionUs = 0L
     private var currentPositionUsValue = 0L
     private var durationUsValue = 0L
@@ -90,6 +97,7 @@ class FfmpegNativePreviewEngine(context: Context) : PreviewEngine {
     private var latestEvaluatedParams: VideoAdjustmentParams? = null
 
     override var onTimeChanged: ((Long) -> Unit)? = null
+    override var onPlaybackEnded: (() -> Unit)? = null
 
     override val currentPositionUs: Long
         get() = currentPositionUsValue
@@ -110,6 +118,10 @@ class FfmpegNativePreviewEngine(context: Context) : PreviewEngine {
 
     /** Attaches a TextureView output so the decoded frame participates in Compose transforms. */
     fun attachToTextureView(view: TextureView) {
+        if (released) {
+            view.surfaceTextureListener = null
+            return
+        }
         if (attachedTextureView === view) {
             if (view.isAvailable && outputSurface == null) {
                 view.surfaceTexture?.let { onTextureAvailable(view, it) }
@@ -128,11 +140,23 @@ class FfmpegNativePreviewEngine(context: Context) : PreviewEngine {
             override fun onSurfaceTextureUpdated(surfaceTexture: SurfaceTexture) = Unit
 
             override fun onSurfaceTextureDestroyed(surfaceTexture: SurfaceTexture): Boolean {
-                if (ownedSurfaceTexture === surfaceTexture) {
+                val appOwnsTexture = surfaceTexture === ownedSurfaceTexture ||
+                    surfaceTextureOwners.containsKey(surfaceTexture) ||
+                    pendingTextureReleases.contains(surfaceTexture) ||
+                    releasedTexturesAwaitingViewCleanup.contains(surfaceTexture)
+                if (surfaceTexture === ownedSurfaceTexture) {
                     replaceOutputSurface(newSurface = null, newTexture = null, textureToRelease = surfaceTexture)
+                } else if (appOwnsTexture && !pendingTextureReleases.contains(surfaceTexture) &&
+                    !releasedTexturesAwaitingViewCleanup.contains(surfaceTexture)
+                ) {
+                    pendingTextureReleases.add(surfaceTexture)
+                    CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+                        nativeMutex.withLock { releaseTextureSafely(surfaceTexture) }
+                    }
                 }
-                // Keep the texture alive until the native window and MediaCodec surface are detached.
-                return false
+                // Return false when this engine owns the texture. TextureView then leaves it alive
+                // for us to release only after FFmpeg/MediaCodec has dropped its native window.
+                return !appOwnsTexture
             }
         }
         if (view.isAvailable) view.surfaceTexture?.let { onTextureAvailable(view, it) }
@@ -140,14 +164,19 @@ class FfmpegNativePreviewEngine(context: Context) : PreviewEngine {
 
     private fun onTextureAvailable(view: TextureView, surfaceTexture: SurfaceTexture) {
         if (released || attachedTextureView !== view || ownedSurfaceTexture === surfaceTexture) return
+        surfaceTextureOwners[surfaceTexture] = view
         replaceOutputSurface(Surface(surfaceTexture), surfaceTexture, null)
     }
 
     fun detachFromTextureView(view: TextureView) {
         if (attachedTextureView !== view) return
-        view.surfaceTextureListener = null
+        // Leave the listener installed until native close completes. If the view is destroyed in
+        // the meantime, onSurfaceTextureDestroyed returns false so release stays deferred to us.
         attachedTextureView = null
         val texture = ownedSurfaceTexture
+        if (texture == null && outputSurface == null) {
+            view.surfaceTextureListener = null
+        }
         replaceOutputSurface(newSurface = null, newTexture = null, textureToRelease = texture)
     }
 
@@ -163,7 +192,9 @@ class FfmpegNativePreviewEngine(context: Context) : PreviewEngine {
     ) {
         if (released) {
             newSurface?.release()
-            textureToRelease?.release()
+            if (textureToRelease != null && pendingTextureReleases.add(textureToRelease)) {
+                releaseTextureSafely(textureToRelease)
+            }
             return
         }
         val previousSurface = outputSurface
@@ -180,7 +211,23 @@ class FfmpegNativePreviewEngine(context: Context) : PreviewEngine {
             scheduleNativeClose(previousSurface, textureToFree)
             return
         }
+        textureToFree?.let(pendingTextureReleases::add)
         beginLoad(uri, positionUs, shouldResume, previousSurfaceToRelease = previousSurface, textureToRelease = textureToFree)
+    }
+
+    private fun releaseTextureSafely(texture: SurfaceTexture?) {
+        if (texture == null) return
+        runCatching { texture.release() }
+        pendingTextureReleases.remove(texture)
+        val owner = surfaceTextureOwners[texture] ?: return
+        releasedTexturesAwaitingViewCleanup.add(texture)
+        mainHandler.post {
+            if (surfaceTextureOwners[texture] === owner && owner !== attachedTextureView) {
+                owner.surfaceTextureListener = null
+            }
+            surfaceTextureOwners.remove(texture, owner)
+            releasedTexturesAwaitingViewCleanup.remove(texture)
+        }
     }
 
     override fun loadMedia(
@@ -247,7 +294,7 @@ class FfmpegNativePreviewEngine(context: Context) : PreviewEngine {
                         withContext(Dispatchers.IO) {
                             NativeFfmpegDecoder.close(handleToClose)
                             previousSurfaceToRelease?.release()
-                            textureToRelease?.release()
+                            releaseTextureSafely(textureToRelease)
                         }
 
                         if (released || generation != loadGeneration.get()) return@withLock
@@ -281,6 +328,9 @@ class FfmpegNativePreviewEngine(context: Context) : PreviewEngine {
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
+            } catch (error: LinkageError) {
+                if (released || generation != loadGeneration.get()) return@launch
+                reportFailure(uri, "FFmpeg native decoder could not initialize on this device", error)
             } catch (error: Exception) {
                 if (released || generation != loadGeneration.get()) return@launch
                 reportFailure(uri, error.message ?: "FFmpeg could not open this video", error)
@@ -300,40 +350,53 @@ class FfmpegNativePreviewEngine(context: Context) : PreviewEngine {
     private fun startProgressTracker(generation: Long) {
         progressJob?.cancel()
         progressJob = scope.launch {
-            while (!released && generation == loadGeneration.get()) {
-                val handle = nativeHandle
-                if (handle != 0L) {
-                    val frameAvailable = NativeFfmpegDecoder.hasFirstFrame(handle)
-                    val error = NativeFfmpegDecoder.lastError(handle)
-                    if (frameAvailable && !_firstFrameRendered.value) {
-                        _firstFrameRendered.value = true
-                        _currentState.value = if (NativeFfmpegDecoder.isPlaying(handle)) {
-                            PreviewState.PLAYING
-                        } else {
-                            PreviewState.READY
+            try {
+                while (!released && generation == loadGeneration.get()) {
+                    val handle = nativeHandle
+                    if (handle != 0L) {
+                        val frameAvailable = NativeFfmpegDecoder.hasFirstFrame(handle)
+                        val error = NativeFfmpegDecoder.lastError(handle)
+                        if (frameAvailable && !_firstFrameRendered.value) {
+                            _firstFrameRendered.value = true
+                            _currentState.value = if (NativeFfmpegDecoder.isPlaying(handle)) {
+                                PreviewState.PLAYING
+                            } else {
+                                PreviewState.READY
+                            }
                         }
-                    }
-                    if (error.isNotBlank()) {
-                        reportFailure(requestedUri.orEmpty(), error, null)
-                        return@launch
-                    }
-
-                    val position = NativeFfmpegDecoder.positionUs(handle).coerceAtLeast(0L)
-                    currentPositionUsValue = position
-                    if (_firstFrameRendered.value) onTimeChanged?.invoke(position)
-                    if (!NativeFfmpegDecoder.isPlaying(handle) && playbackRequested) {
-                        if (durationUsValue > 0L && position >= durationUsValue - 50_000L) {
-                            playbackRequested = false
-                            audioPlayer.pause()
-                            currentPositionUsValue = durationUsValue
-                            onTimeChanged?.invoke(durationUsValue)
-                            _currentState.value = PreviewState.READY
+                        if (error.isNotBlank()) {
+                            reportFailure(requestedUri.orEmpty(), error, null)
                             return@launch
                         }
-                        if (_firstFrameRendered.value) _currentState.value = PreviewState.READY
+
+                        val position = NativeFfmpegDecoder.positionUs(handle).coerceAtLeast(0L)
+                        currentPositionUsValue = position
+                        if (_firstFrameRendered.value) onTimeChanged?.invoke(position)
+                        if (!NativeFfmpegDecoder.isPlaying(handle) && playbackRequested) {
+                            if (durationUsValue > 0L && position >= durationUsValue - 50_000L) {
+                                playbackRequested = false
+                                audioPlayer.pause()
+                                currentPositionUsValue = durationUsValue
+                                _currentState.value = PreviewState.READY
+                                onTimeChanged?.invoke(durationUsValue)
+                                onPlaybackEnded?.invoke()
+                                return@launch
+                            }
+                            if (_firstFrameRendered.value) _currentState.value = PreviewState.READY
+                        }
                     }
+                    delay(33L)
                 }
-                delay(33L)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: LinkageError) {
+                if (!released && generation == loadGeneration.get()) {
+                    reportFailure(requestedUri.orEmpty(), "FFmpeg native decoder failed to initialize", error)
+                }
+            } catch (error: Exception) {
+                if (!released && generation == loadGeneration.get()) {
+                    reportFailure(requestedUri.orEmpty(), error.message ?: "FFmpeg playback failed", error)
+                }
             }
         }
     }
@@ -369,17 +432,18 @@ class FfmpegNativePreviewEngine(context: Context) : PreviewEngine {
     }
 
     private fun scheduleNativeClose(surface: Surface?, texture: SurfaceTexture?) {
-        val generation = loadGeneration.incrementAndGet()
+        loadGeneration.incrementAndGet()
         val handle = nativeHandle
         nativeHandle = 0L
         progressJob?.cancel()
         audioPlayer.pause()
         _currentState.value = PreviewState.IDLE
+        texture?.let(pendingTextureReleases::add)
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             nativeMutex.withLock {
                 NativeFfmpegDecoder.close(handle)
                 surface?.release()
-                texture?.release()
+                releaseTextureSafely(texture)
             }
         }
     }
@@ -445,6 +509,7 @@ class FfmpegNativePreviewEngine(context: Context) : PreviewEngine {
         loadGeneration.incrementAndGet()
         progressJob?.cancel()
         onTimeChanged = null
+        onPlaybackEnded = null
         audioPlayer.pause()
         audioPlayer.release()
         val handle = nativeHandle
@@ -452,14 +517,19 @@ class FfmpegNativePreviewEngine(context: Context) : PreviewEngine {
         val surface = outputSurface
         outputSurface = null
         val texture = ownedSurfaceTexture
+        val attachedView = attachedTextureView
         ownedSurfaceTexture = null
-        attachedTextureView?.surfaceTextureListener = null
+        // Keep the TextureView callback installed until after the native window has been closed.
         attachedTextureView = null
+        if (texture == null && surface == null) {
+            mainHandler.post { attachedView?.surfaceTextureListener = null }
+        }
+        texture?.let(pendingTextureReleases::add)
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             nativeMutex.withLock {
                 NativeFfmpegDecoder.close(handle)
                 surface?.release()
-                texture?.release()
+                releaseTextureSafely(texture)
             }
         }
         scope.cancel()

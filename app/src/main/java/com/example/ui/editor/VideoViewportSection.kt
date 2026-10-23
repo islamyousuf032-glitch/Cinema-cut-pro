@@ -94,10 +94,10 @@ fun VideoViewportSection(
     }
 
     DisposableEffect(timelinePreviewController, timelineViewModel) {
+        // ChromaProApp owns the shared playhead callback. Keep this viewport-local effect limited
+        // to the transport state so it cannot replace or clear the shared callback on disposal.
         timelinePreviewController.onPlaybackEnded = { timelineViewModel.pausePlay() }
-        onDispose {
-            timelinePreviewController.onPlaybackEnded = null
-        }
+        onDispose { timelinePreviewController.onPlaybackEnded = null }
     }
 
     var handledPlaybackError by remember { mutableStateOf<Pair<com.example.timeline.engine.preview.PreviewEngineType, String>?>(null) }
