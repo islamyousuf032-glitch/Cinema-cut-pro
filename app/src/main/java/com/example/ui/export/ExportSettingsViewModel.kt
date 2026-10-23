@@ -25,7 +25,8 @@ class ExportSettingsViewModel(application: Application) : AndroidViewModel(appli
                 project.id,
                 "ChromaPro_${project.name}_Export"
             ),
-            project
+            project,
+            matchProjectOrientation = true
         )
         
         _uiState.update { 
@@ -47,7 +48,16 @@ class ExportSettingsViewModel(application: Application) : AndroidViewModel(appli
         if (_uiState.value.project != project) {
             _uiState.update { state ->
                 val adaptedSettings = state.currentSettings?.let {
-                    ExportSettingsDefaults.adaptToSimpleSource(it, project)
+                    ExportSettingsDefaults.adaptToSimpleSource(
+                        it,
+                        project,
+                        matchProjectOrientation = state.selectedPreset !in setOf(
+                            ExportPresetType.YOUTUBE_SHORTS,
+                            ExportPresetType.TIKTOK,
+                            ExportPresetType.INSTAGRAM_REELS,
+                            ExportPresetType.CUSTOM
+                        )
+                    )
                 }
                 state.copy(project = project, currentSettings = adaptedSettings)
             }
@@ -68,13 +78,20 @@ class ExportSettingsViewModel(application: Application) : AndroidViewModel(appli
 
     fun selectPreset(preset: ExportPresetType) {
         val project = _uiState.value.project ?: return
+        val currentSettings = _uiState.value.currentSettings
+        val requestedSettings = ExportPresetManager.getSettingsForPreset(
+            preset,
+            project.id,
+            currentSettings?.outputFileName ?: "CinemaCutPro_Export"
+        ).copy(outputDirectoryUri = currentSettings?.outputDirectoryUri.orEmpty())
         val newSettings = ExportSettingsDefaults.adaptToSimpleSource(
-            ExportPresetManager.getSettingsForPreset(
-                preset,
-                project.id,
-                _uiState.value.currentSettings?.outputFileName ?: "output"
-            ),
-            project
+            requestedSettings,
+            project,
+            matchProjectOrientation = preset !in setOf(
+                ExportPresetType.YOUTUBE_SHORTS,
+                ExportPresetType.TIKTOK,
+                ExportPresetType.INSTAGRAM_REELS
+            )
         )
         _uiState.update {
             it.copy(
@@ -115,7 +132,7 @@ class ExportSettingsViewModel(application: Application) : AndroidViewModel(appli
         val activeVideoTrack = project?.tracks
             ?.filter { it.type == com.example.timeline.core.TrackType.VIDEO && it.isVisible && it.clips.any { clip -> clip.isEnabled } }
             ?.singleOrNull()
-        val includesEmbeddedAudio = activeVideoTrack != null && !activeVideoTrack.isMuted &&
+        val includesEmbeddedAudio = settings.includeAudio && activeVideoTrack != null && !activeVideoTrack.isMuted &&
             enabledVideoClips.all { clip ->
                 project?.mediaAssets?.firstOrNull { it.assetId == clip.mediaId }?.metadata?.hasAudio == true
             }

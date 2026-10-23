@@ -3,8 +3,10 @@ package com.example.timeline.export.backend
 import android.content.Context
 import android.media.MediaCodecInfo
 import android.media.MediaCodecList
+import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.net.Uri
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import androidx.media3.common.Effect
@@ -65,6 +67,7 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.math.BigInteger
+import java.nio.ByteBuffer
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.abs
 import kotlin.math.roundToLong
@@ -87,8 +90,22 @@ internal fun isWithinMedia3ResolutionLimit(
     return maxOf(width, height) <= maximumLongEdge && minOf(width, height) <= maximumShortEdge
 }
 
+internal fun shouldIncludeEmbeddedAudio(
+    settings: ExportSettings,
+    trackMuted: Boolean,
+    clipHasAudio: List<Boolean>
+): Boolean = settings.includeAudio && !trackMuted && clipHasAudio.isNotEmpty() && clipHasAudio.all { it }
+
+internal interface Media3CodecSupportProbe {
+    fun hasVideoEncoder(settings: ExportSettings, requireHardware: Boolean): Boolean
+    fun hasAudioEncoder(sampleRate: Int, channelCount: Int, bitrate: Int): Boolean
+}
+
 @OptIn(UnstableApi::class)
-class Media3TransformerBackend(context: Context) : ExportBackend {
+class Media3TransformerBackend internal constructor(
+    context: Context,
+    private val codecSupportProbe: Media3CodecSupportProbe = AndroidMedia3CodecSupportProbe
+) : ExportBackend {
     override val backendType: ExportBackendType = ExportBackendType.MEDIA3_TRANSFORMER
 
     private val appContext = context.applicationContext
@@ -119,17 +136,6 @@ class Media3TransformerBackend(context: Context) : ExportBackend {
         val transformer: Transformer,
         val listener: Transformer.Listener
     )
-
-    private data class VideoEncoderQuery(
-        val width: Int,
-        val height: Int,
-        val frameRate: Float,
-        val bitrate: Int,
-        val bitrateMode: Int,
-        val hardwareAccelerated: Boolean
-    )
-
-    private data class AudioEncoderQuery(val sampleRate: Int, val channelCount: Int, val bitrate: Int)
 
     override fun getCapabilities(): ExportBackendCapability = ExportBackendCapability(
         backendAvailable = true,
@@ -321,6 +327,7 @@ class Media3TransformerBackend(context: Context) : ExportBackend {
             if (!outputFile.isFile || outputFile.length() <= 0L) {
                 error("Media3 completed without producing a non-empty MP4 file.")
             }
+            verifyPlayableMp4(outputFile, plan.includeAudio)
 
             succeeded = true
             onProgress(
@@ -348,7 +355,7 @@ class Media3TransformerBackend(context: Context) : ExportBackend {
                     elapsedMs = System.currentTimeMillis() - startedAtMs,
                     estimatedRemainingMs = 0L,
                     currentStage = "Export failed",
-                    errorMessage = failure.message ?: failure.javaClass.simpleName
+                    errorMessage = describeTransformerFailure(failure)
                 )
             )
         } finally {
@@ -378,11 +385,91 @@ class Media3TransformerBackend(context: Context) : ExportBackend {
         projectRef = null
     }
 
+    private fun verifyPlayableMp4(outputFile: File, expectAudio: Boolean) {
+        val extractor = MediaExtractor()
+        try {
+            extractor.setDataSource(outputFile.absolutePath)
+            val trackFormats = (0 until extractor.trackCount).map(extractor::getTrackFormat)
+            val videoFormats = trackFormats.filter {
+                it.getString(MediaFormat.KEY_MIME)?.startsWith("video/") == true
+            }
+            check(videoFormats.size == 1) {
+                "Media3 reported success, but the MP4 does not contain exactly one readable video track."
+            }
+            val videoFormat = videoFormats.single()
+            check(videoFormat.getInteger(MediaFormat.KEY_WIDTH) > 0 && videoFormat.getInteger(MediaFormat.KEY_HEIGHT) > 0) {
+                "The exported MP4 video track has invalid dimensions."
+            }
+            check(!videoFormat.containsKey(MediaFormat.KEY_DURATION) || videoFormat.getLong(MediaFormat.KEY_DURATION) > 0L) {
+                "The exported MP4 video track has no usable duration."
+            }
+            val videoTrackIndex = trackFormats.indexOf(videoFormat)
+            extractor.selectTrack(videoTrackIndex)
+            check(hasReadableSample(extractor, videoFormat)) {
+                "The exported MP4 video track contains no readable encoded samples."
+            }
+            if (expectAudio) {
+                val audioTrackIndex = trackFormats.indexOfFirst {
+                    it.getString(MediaFormat.KEY_MIME)?.startsWith("audio/") == true
+                }
+                check(audioTrackIndex >= 0) {
+                    "Audio was requested, but the exported MP4 contains no readable audio track."
+                }
+                extractor.unselectTrack(videoTrackIndex)
+                val audioFormat = trackFormats[audioTrackIndex]
+                extractor.selectTrack(audioTrackIndex)
+                check(hasReadableSample(extractor, audioFormat)) {
+                    "Audio was requested, but the exported MP4 audio track contains no readable samples."
+                }
+            }
+        } catch (failure: Exception) {
+            throw IllegalStateException(
+                failure.message?.takeIf(String::isNotBlank)
+                    ?: "The output cannot be reopened as a playable MP4.",
+                failure
+            )
+        } finally {
+            extractor.release()
+        }
+    }
+
+    private fun describeTransformerFailure(failure: Throwable): String = buildString {
+        if (failure is ExportException) {
+            append(failure.errorCodeName)
+            append(" (code ")
+            append(failure.errorCode)
+            append(')')
+        }
+        failure.message?.takeIf(String::isNotBlank)?.let { message ->
+            if (isNotEmpty()) append(": ")
+            append(message)
+        }
+        val causeMessage = failure.cause?.message?.takeIf(String::isNotBlank)
+        if (causeMessage != null && causeMessage != failure.message) {
+            if (isNotEmpty()) append(" — ")
+            append(causeMessage)
+        }
+        if (isEmpty()) append(failure.javaClass.simpleName)
+    }.take(MAX_FAILURE_MESSAGE_LENGTH)
+
+    private fun hasReadableSample(extractor: MediaExtractor, format: MediaFormat): Boolean {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) return extractor.sampleSize > 0L
+        val maximumInputSize = runCatching { format.getInteger(MediaFormat.KEY_MAX_INPUT_SIZE) }
+            .getOrDefault(0)
+            .coerceAtLeast(0)
+        val bufferCapacity = maxOf(MIN_SAMPLE_BUFFER_BYTES, maximumInputSize)
+            .coerceAtMost(MAX_SAMPLE_BUFFER_BYTES)
+        return runCatching {
+            extractor.readSampleData(ByteBuffer.allocateDirect(bufferCapacity), 0) > 0
+        }.getOrDefault(false)
+    }
+
     private fun collectValidationErrors(settings: ExportSettings, project: TimelineProject): List<String> {
         val errors = mutableListOf<String>()
         val capabilities = getCapabilities()
 
         if (!capabilities.backendAvailable) errors += "Media3 Transformer is unavailable."
+        if (settings.outputFileName.isBlank()) errors += "Enter a file name for the exported MP4."
         if (settings.codec != ExportCodec.H264) errors += "This export path supports H.264 video only."
         if (settings.container != ExportContainer.MP4) errors += "This export path supports MP4 containers only."
         if (settings.resolutionWidth <= 0 || settings.resolutionHeight <= 0 ||
@@ -409,9 +496,11 @@ class Media3TransformerBackend(context: Context) : ExportBackend {
         else if (settings.maxBitrate != settings.videoBitrate) {
             errors += "This export path exposes one target bitrate only; set maximum bitrate equal to the target bitrate."
         }
-        if (settings.audioBitrate <= 0) errors += "The target audio bitrate must be positive."
-        if (settings.audioSampleRate <= 0) errors += "The AAC sample rate must be positive."
-        if (settings.audioChannels !in 1..2) errors += "This export path supports mono or stereo AAC output only."
+        if (settings.includeAudio) {
+            if (settings.audioBitrate <= 0) errors += "The target audio bitrate must be positive."
+            if (settings.audioSampleRate <= 0) errors += "The AAC sample rate must be positive."
+            if (settings.audioChannels !in 1..2) errors += "This export path supports mono or stereo AAC output only."
+        }
         if (settings.keyframeInterval !in 1..120) {
             errors += "The H.264 keyframe interval must be between 1 and 120 seconds."
         }
@@ -421,7 +510,6 @@ class Media3TransformerBackend(context: Context) : ExportBackend {
         if (settings.profile != null || settings.level != null) {
             errors += "Custom H.264 profile and level selection is not supported by this export path."
         }
-        if (!settings.useHardwareEncoder) errors += "This export path cannot force a software-only encoder; hardware acceleration is checked when requested and remains best-effort at render time."
         if (!settings.useOriginalMedia || settings.allowProxyExport) {
             errors += "This export path reads original media only; proxy selection is not implemented."
         }
@@ -432,10 +520,10 @@ class Media3TransformerBackend(context: Context) : ExportBackend {
             errors += "This first export path supports Rec.709 SDR output only."
         }
         if (settings.includeWatermark) errors += "Watermark compositing is not supported by this export path yet."
-        if (settings.audioCodec != com.example.timeline.export.model.ExportAudioSettings.AudioCodec.AAC) {
+        if (settings.includeAudio && settings.audioCodec != com.example.timeline.export.model.ExportAudioSettings.AudioCodec.AAC) {
             errors += "This export path supports AAC audio only."
         }
-        if (settings.normalizeAudio) errors += "Audio normalization is not supported by this export path yet."
+        if (settings.includeAudio && settings.normalizeAudio) errors += "Audio normalization is not supported by this export path yet."
 
         val activeVideoTracks = project.tracks.filter { track ->
             track.type == TrackType.VIDEO && track.isVisible && track.clips.any { it.isEnabled }
@@ -476,8 +564,8 @@ class Media3TransformerBackend(context: Context) : ExportBackend {
         val visibleAudioClips = project.tracks
             .filter { it.type == TrackType.AUDIO && !it.isMuted }
             .flatMap { it.clips.filter { clip -> clip.isEnabled } }
-        if (visibleAudioClips.isNotEmpty()) {
-            errors += "Separate audio-track clips and audio mixes are not supported by this export path."
+        if (settings.includeAudio && visibleAudioClips.isNotEmpty()) {
+            errors += "Separate audio-track clips and audio mixes are not supported when audio is included; turn off Include audio to export a silent video."
         }
         if (project.tracks.any { track ->
                 track.type !in setOf(TrackType.VIDEO, TrackType.AUDIO) && track.clips.any { it.isEnabled }
@@ -522,7 +610,7 @@ class Media3TransformerBackend(context: Context) : ExportBackend {
             if (clip.transform != ClipTransform.defaultTransform()) {
                 errors += "Clip transforms, crops, perspective changes, and transform keyframes are not supported by this path yet."
             }
-            if (clip.volume != 1f && !track.isMuted) {
+            if (settings.includeAudio && clip.volume != 1f && !track.isMuted) {
                 errors += "Per-clip volume changes are not supported by this export path yet."
             }
             val effectiveAdjustmentParams = effectiveAdjustmentParams(clip)
@@ -563,7 +651,7 @@ class Media3TransformerBackend(context: Context) : ExportBackend {
             val sourceUriString = asset.localOriginalUriString?.takeIf { it.isNotBlank() } ?: asset.originalUriString
             if (sourceUriString.isBlank()) errors += "An imported video has no readable source URI."
 
-            if (!track.isMuted) {
+            if (settings.includeAudio && !track.isMuted) {
                 if (embeddedAudioPresent == null) {
                     embeddedAudioPresent = asset.metadata.hasAudio
                 } else if (embeddedAudioPresent != asset.metadata.hasAudio) {
@@ -585,16 +673,24 @@ class Media3TransformerBackend(context: Context) : ExportBackend {
                 }
             }
         }
-        if (audioFormats.size > 1) {
-            errors += "Embedded audio formats must use the same sample rate and channel count across all clips."
+        if (settings.includeAudio && audioFormats.size > 1) {
+            errors += "Embedded audio formats must use the same sample rate and channel count across all clips; turn off Include audio to export a silent video."
         }
-        val includeAudio = activeVideoTrack?.isMuted == false && activeClips.isNotEmpty() &&
-            activeClips.all { it.asset.metadata.hasAudio }
-        if (includeAudio && !hasAudioEncoder(settings.audioSampleRate, settings.audioChannels, settings.audioBitrate)) {
-            errors += "No Android AAC encoder supports the requested source audio format."
+        val includeAudio = shouldIncludeEmbeddedAudio(
+            settings = settings,
+            trackMuted = activeVideoTrack?.isMuted ?: true,
+            clipHasAudio = activeClips.map { it.asset.metadata.hasAudio }
+        )
+        if (settings.includeAudio && activeVideoTrack?.isMuted == false && activeClips.isNotEmpty() &&
+            activeClips.none { it.asset.metadata.hasAudio }
+        ) {
+            errors += "No embedded audio is available; turn off Include audio to export a silent video."
         }
-        if (activeClips.isNotEmpty() && settings.useHardwareEncoder && !hasVideoEncoder(settings)) {
-            errors += "No hardware-accelerated Android H.264 encoder supports the requested resolution, frame rate, bitrate, and bitrate mode."
+        if (includeAudio && !codecSupportProbe.hasAudioEncoder(settings.audioSampleRate, settings.audioChannels, settings.audioBitrate)) {
+            errors += "No Android AAC encoder supports the requested source audio format; turn off Include audio to export a silent video."
+        }
+        if (activeClips.isNotEmpty() && !codecSupportProbe.hasVideoEncoder(settings, requireHardware = false)) {
+            errors += "No Android H.264 encoder supports the requested resolution, frame rate, bitrate, and bitrate mode. Try a lower resolution or bitrate."
         }
 
         return errors.distinct()
@@ -602,8 +698,14 @@ class Media3TransformerBackend(context: Context) : ExportBackend {
 
     private fun collectValidationWarnings(settings: ExportSettings, project: TimelineProject): List<String> {
         val warnings = mutableListOf<String>()
-        if (settings.useHardwareEncoder) {
-            warnings += "Media3 selects a compatible Android codec; this adapter cannot guarantee hardware acceleration."
+        val anyVideoEncoder = codecSupportProbe.hasVideoEncoder(settings, requireHardware = false)
+        val hardwareVideoEncoder = codecSupportProbe.hasVideoEncoder(settings, requireHardware = true)
+        if (settings.useHardwareEncoder && anyVideoEncoder && !hardwareVideoEncoder) {
+            warnings += "No matching hardware H.264 encoder was detected; Media3 may use a compatible software encoder, which can be slower."
+        } else if (settings.useHardwareEncoder && hardwareVideoEncoder) {
+            warnings += "Media3 selects the Android H.264 encoder; hardware acceleration remains best-effort."
+        } else if (!settings.useHardwareEncoder && anyVideoEncoder) {
+            warnings += "Media3 still selects the compatible Android H.264 encoder; this setting cannot force software-only encoding."
         }
         val activeAssets = project.tracks
             .filter { it.type == TrackType.VIDEO && it.isVisible }
@@ -648,9 +750,13 @@ class Media3TransformerBackend(context: Context) : ExportBackend {
             Math.addExact(totalUs, clip.endPositionUs - clip.startPositionUs)
         }
         val outputFrames = framesAtRate(totalDurationUs, settings.frameRate).coerceAtLeast(1L)
-        val includeAudio = !track.isMuted && enabledClips.all { clip ->
-            project.mediaAssets.first { it.assetId == clip.mediaId }.metadata.hasAudio
-        }
+        val includeAudio = shouldIncludeEmbeddedAudio(
+            settings = settings,
+            trackMuted = track.isMuted,
+            clipHasAudio = enabledClips.map { clip ->
+                project.mediaAssets.first { it.assetId == clip.mediaId }.metadata.hasAudio
+            }
+        )
         return ExportPlan(
             clips = clipPlans,
             outputFrameCount = outputFrames,
@@ -667,75 +773,6 @@ class Media3TransformerBackend(context: Context) : ExportBackend {
             VideoAdjustmentParams.default()
         }
         return params.copy(curves = if (useGradeCurves) gradeCurves else params.curves)
-    }
-
-    private fun hasVideoEncoder(settings: ExportSettings): Boolean {
-        val bitrateMode = when (settings.bitrateMode) {
-            ExportSettings.BitrateMode.CBR -> MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR
-            ExportSettings.BitrateMode.AUTO,
-            ExportSettings.BitrateMode.VBR,
-            ExportSettings.BitrateMode.CRF -> MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR
-        }
-        if (!settings.useHardwareEncoder) return false
-        val query = VideoEncoderQuery(
-            width = settings.resolutionWidth,
-            height = settings.resolutionHeight,
-            frameRate = settings.frameRate.floatValue,
-            bitrate = settings.videoBitrate,
-            bitrateMode = bitrateMode,
-            hardwareAccelerated = settings.useHardwareEncoder
-        )
-        return videoEncoderSupportCache.computeIfAbsent(query) {
-            runCatching {
-                MediaCodecList(MediaCodecList.ALL_CODECS).codecInfos.any { codecInfo ->
-                    codecInfo.isEncoder &&
-                        isHardwareAcceleratedEncoder(codecInfo) == query.hardwareAccelerated &&
-                        codecInfo.supportedTypes.any { it.equals(MediaFormat.MIMETYPE_VIDEO_AVC, true) } &&
-                        runCatching {
-                            val capabilities = codecInfo.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_AVC)
-                            val video = capabilities.videoCapabilities ?: return@runCatching false
-                            val encoder = capabilities.encoderCapabilities ?: return@runCatching false
-                            video.areSizeAndRateSupported(
-                                query.width,
-                                query.height,
-                                query.frameRate.toDouble()
-                            ) && video.bitrateRange.contains(query.bitrate) &&
-                                encoder.isBitrateModeSupported(query.bitrateMode)
-                        }.getOrDefault(false)
-                }
-            }.getOrDefault(false)
-        }
-    }
-
-    private fun isHardwareAcceleratedEncoder(codecInfo: MediaCodecInfo): Boolean {
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
-            return codecInfo.isHardwareAccelerated
-        }
-
-        // MediaCodecInfo.isHardwareAccelerated is unavailable before API 29. Android's software
-        // codecs use these stable names; unknown vendor encoders are treated as hardware-capable.
-        val name = codecInfo.name.lowercase()
-        return !name.startsWith("omx.google.") &&
-            !name.startsWith("c2.android.") &&
-            !name.contains("software")
-    }
-
-    private fun hasAudioEncoder(sampleRate: Int, channelCount: Int, bitrate: Int): Boolean {
-        val query = AudioEncoderQuery(sampleRate, channelCount, bitrate)
-        return audioEncoderSupportCache.computeIfAbsent(query) {
-            runCatching {
-                MediaCodecList(MediaCodecList.ALL_CODECS).codecInfos.any { codecInfo ->
-                    codecInfo.isEncoder && codecInfo.supportedTypes.any { it.equals(MediaFormat.MIMETYPE_AUDIO_AAC, true) } &&
-                        runCatching {
-                            val capabilities = codecInfo.getCapabilitiesForType(MediaFormat.MIMETYPE_AUDIO_AAC)
-                            val audio = capabilities.audioCapabilities ?: return@runCatching false
-                            audio.isSampleRateSupported(query.sampleRate) &&
-                                query.channelCount <= audio.maxInputChannelCount &&
-                                audio.bitrateRange.contains(query.bitrate)
-                        }.getOrDefault(false)
-                }
-            }.getOrDefault(false)
-        }
     }
 
     private fun hasEnabledGrade(grade: ColorGradeStack): Boolean = grade.enabled &&
@@ -823,7 +860,88 @@ class Media3TransformerBackend(context: Context) : ExportBackend {
     private companion object {
         const val PROGRESS_POLL_INTERVAL_MS = 250L
         const val FRAME_RATE_TOLERANCE_FPS = 0.01f
-        val videoEncoderSupportCache = ConcurrentHashMap<VideoEncoderQuery, Boolean>()
-        val audioEncoderSupportCache = ConcurrentHashMap<AudioEncoderQuery, Boolean>()
+        const val MIN_SAMPLE_BUFFER_BYTES = 4 * 1024 * 1024
+        const val MAX_SAMPLE_BUFFER_BYTES = 32 * 1024 * 1024
+        const val MAX_FAILURE_MESSAGE_LENGTH = 2_000
+    }
+}
+
+private data class VideoEncoderQuery(
+    val width: Int,
+    val height: Int,
+    val frameRate: Float,
+    val bitrate: Int,
+    val bitrateMode: Int,
+    val requireHardware: Boolean
+)
+
+private data class AudioEncoderQuery(val sampleRate: Int, val channelCount: Int, val bitrate: Int)
+
+private object AndroidMedia3CodecSupportProbe : Media3CodecSupportProbe {
+    private val videoEncoderSupportCache = ConcurrentHashMap<VideoEncoderQuery, Boolean>()
+    private val audioEncoderSupportCache = ConcurrentHashMap<AudioEncoderQuery, Boolean>()
+
+    override fun hasVideoEncoder(settings: ExportSettings, requireHardware: Boolean): Boolean {
+        val bitrateMode = when (settings.bitrateMode) {
+            ExportSettings.BitrateMode.CBR -> MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR
+            ExportSettings.BitrateMode.AUTO,
+            ExportSettings.BitrateMode.VBR,
+            ExportSettings.BitrateMode.CRF -> MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR
+        }
+        val query = VideoEncoderQuery(
+            width = settings.resolutionWidth,
+            height = settings.resolutionHeight,
+            frameRate = settings.frameRate.floatValue,
+            bitrate = settings.videoBitrate,
+            bitrateMode = bitrateMode,
+            requireHardware = requireHardware
+        )
+        return videoEncoderSupportCache.computeIfAbsent(query) {
+            runCatching {
+                MediaCodecList(MediaCodecList.ALL_CODECS).codecInfos.any { codecInfo ->
+                    codecInfo.isEncoder &&
+                        (!query.requireHardware || isHardwareAcceleratedEncoder(codecInfo)) &&
+                        codecInfo.supportedTypes.any { it.equals(MediaFormat.MIMETYPE_VIDEO_AVC, true) } &&
+                        runCatching {
+                            val capabilities = codecInfo.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_AVC)
+                            val video = capabilities.videoCapabilities ?: return@runCatching false
+                            val encoder = capabilities.encoderCapabilities ?: return@runCatching false
+                            video.areSizeAndRateSupported(
+                                query.width,
+                                query.height,
+                                query.frameRate.toDouble()
+                            ) && video.bitrateRange.contains(query.bitrate) &&
+                                encoder.isBitrateModeSupported(query.bitrateMode)
+                        }.getOrDefault(false)
+                }
+            }.getOrDefault(false)
+        }
+    }
+
+    private fun isHardwareAcceleratedEncoder(codecInfo: MediaCodecInfo): Boolean {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            return codecInfo.isHardwareAccelerated
+        }
+        // Android's software codecs use these stable names; unknown vendor encoders are treated as hardware-capable.
+        val name = codecInfo.name.lowercase()
+        return !name.startsWith("omx.google.") && !name.startsWith("c2.android.") && !name.contains("software")
+    }
+
+    override fun hasAudioEncoder(sampleRate: Int, channelCount: Int, bitrate: Int): Boolean {
+        val query = AudioEncoderQuery(sampleRate, channelCount, bitrate)
+        return audioEncoderSupportCache.computeIfAbsent(query) {
+            runCatching {
+                MediaCodecList(MediaCodecList.ALL_CODECS).codecInfos.any { codecInfo ->
+                    codecInfo.isEncoder && codecInfo.supportedTypes.any { it.equals(MediaFormat.MIMETYPE_AUDIO_AAC, true) } &&
+                        runCatching {
+                            val capabilities = codecInfo.getCapabilitiesForType(MediaFormat.MIMETYPE_AUDIO_AAC)
+                            val audio = capabilities.audioCapabilities ?: return@runCatching false
+                            audio.isSampleRateSupported(query.sampleRate) &&
+                                query.channelCount <= audio.maxInputChannelCount &&
+                                audio.bitrateRange.contains(query.bitrate)
+                        }.getOrDefault(false)
+                }
+            }.getOrDefault(false)
+        }
     }
 }

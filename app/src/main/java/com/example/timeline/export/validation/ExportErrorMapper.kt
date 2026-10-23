@@ -14,6 +14,14 @@ object ExportErrorMapper {
             return ExportError(ExportErrorType.ENCODER_INIT_FAILED, "Codec error: $message", exception)
         }
 
+        if (exception is SecurityException) {
+            return ExportError(
+                ExportErrorType.OUTPUT_NOT_WRITABLE,
+                "Android denied access to the selected export folder. Choose the folder again and retry.",
+                exception
+            )
+        }
+
         if (exception is IOException) {
             if (message.contains("ENOSPC", ignoreCase = true) || message.contains("No space left", ignoreCase = true)) {
                 return ExportError(ExportErrorType.OUT_OF_STORAGE, "Not enough storage space", exception)

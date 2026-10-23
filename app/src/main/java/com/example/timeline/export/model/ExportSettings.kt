@@ -28,6 +28,7 @@ data class ExportSettings(
     val colorOutput: ExportColorSettings.ColorOutput = ExportColorSettings.ColorOutput.Rec709,
     val toneMappingMode: ExportColorSettings.ToneMappingMode = ExportColorSettings.ToneMappingMode.STANDARD,
     val audioCodec: ExportAudioSettings.AudioCodec = ExportAudioSettings.AudioCodec.AAC,
+    val includeAudio: Boolean = true,
     val audioBitrate: Int = 128000,
     val audioSampleRate: Int = 48000,
     val audioChannels: Int = 2,

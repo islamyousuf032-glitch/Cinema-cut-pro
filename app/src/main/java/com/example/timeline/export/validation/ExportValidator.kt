@@ -3,6 +3,7 @@ package com.example.timeline.export.validation
 import android.content.Context
 import android.net.Uri
 import android.os.Environment
+import android.provider.DocumentsContract
 import com.example.timeline.core.TimelineProject
 import com.example.timeline.core.TrackType
 import com.example.timeline.export.model.ExportSettings
@@ -20,6 +21,18 @@ object ExportValidator {
 
     fun validate(context: Context, project: TimelineProject, settings: ExportSettings): List<ExportError> {
         val errors = mutableListOf<ExportError>()
+        if (settings.outputDirectoryUri.isNotBlank()) {
+            val outputUri = runCatching { Uri.parse(settings.outputDirectoryUri) }.getOrNull()
+            val hasPersistedWritePermission = outputUri != null && context.contentResolver.persistedUriPermissions.any {
+                it.uri == outputUri && it.isWritePermission
+            }
+            if (outputUri == null || !DocumentsContract.isTreeUri(outputUri) || !hasPersistedWritePermission) {
+                errors += ExportError(
+                    ExportErrorType.OUTPUT_NOT_WRITABLE,
+                    "The selected output-folder permission is missing or expired. Choose the folder again."
+                )
+            }
+        }
         val activeVideoTrack = project.tracks.singleOrNull { track ->
             track.type == TrackType.VIDEO && track.isVisible && track.clips.any { it.isEnabled }
         }
@@ -45,7 +58,7 @@ object ExportValidator {
         if (enabledDurationFrames != null && enabledDurationFrames > 0L &&
             projectFps.numerator > 0 && projectFps.denominator > 0 && settings.videoBitrate > 0
         ) {
-            val includesEmbeddedAudio = activeVideoTrack?.isMuted == false && enabledVideoClips.isNotEmpty() &&
+            val includesEmbeddedAudio = settings.includeAudio && activeVideoTrack?.isMuted == false && enabledVideoClips.isNotEmpty() &&
                 enabledVideoClips.all { clip ->
                     project.mediaAssets.firstOrNull { it.assetId == clip.mediaId }?.metadata?.hasAudio == true
                 }

@@ -254,10 +254,10 @@ object BatchExportManager {
             if (backendCompleted && ExportCancelController.isCancelled) {
                 outputFile.delete()
             } else if (backendCompleted) {
-                val saveDestination = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
-                    "Movies/CinemaCutPro"
-                } else {
-                    "App storage"
+                val saveDestination = when {
+                    settings.outputDirectoryUri.isNotBlank() -> "selected folder"
+                    android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q -> "Movies/CinemaCutPro"
+                    else -> "App storage"
                 }
                 val saveStartedAtMs = System.currentTimeMillis()
                 ExportProgressRepository.updateState(
@@ -276,6 +276,8 @@ object BatchExportManager {
                     ExportedVideoPublisher.publish(
                         context = serviceContext,
                         stagingFile = outputFile,
+                        outputDirectoryUri = settings.outputDirectoryUri,
+                        displayNameBase = settings.outputFileName,
                         isCancelled = { ExportCancelController.isCancelled }
                     ) { copiedBytes, totalBytes ->
                         val copyFraction = if (totalBytes > 0L) {

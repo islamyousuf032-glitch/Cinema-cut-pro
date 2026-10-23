@@ -1,6 +1,10 @@
 package com.example.ui.export
 
+import android.content.Intent
 import android.os.Environment
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -20,13 +24,14 @@ import com.example.timeline.core.TimelineProject
 import com.example.timeline.export.BatchExportManager
 import com.example.timeline.export.validation.TimelineExportAutoFixer
 import com.example.timeline.export.service.ExportState
+import com.example.timeline.export.model.normalizeExportFileBaseName
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
 
-private fun createStagingExportFile(context: android.content.Context, extension: String): File {
+private fun createStagingExportFile(context: android.content.Context, outputName: String, extension: String): File {
     val moviesDirectory = context.getExternalFilesDir(Environment.DIRECTORY_MOVIES)
         ?: File(context.filesDir, Environment.DIRECTORY_MOVIES)
     val stagingDirectory = File(moviesDirectory, ".cinema_cut_pro_staging")
@@ -35,7 +40,8 @@ private fun createStagingExportFile(context: android.content.Context, extension:
     }
     val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US).format(Date())
     val suffix = UUID.randomUUID().toString().take(8)
-    return File(stagingDirectory, "CinemaCutPro_Export_${timestamp}_${suffix}.$extension")
+    val safeBaseName = normalizeExportFileBaseName(outputName)
+    return File(stagingDirectory, "${safeBaseName}_${timestamp}_${suffix}.$extension")
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -51,6 +57,27 @@ fun ExportScreen(
     val compactHeight = androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp < 480
     val uiState by viewModel.uiState.collectAsState()
     val exportState by BatchExportManager.exportState.collectAsState()
+    val outputFolderPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        if (uri != null) {
+            val accessFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            val persisted = runCatching {
+                context.contentResolver.takePersistableUriPermission(uri, accessFlags)
+            }.isSuccess || runCatching {
+                // Some document providers grant write without read; that is sufficient for output.
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                )
+            }.isSuccess
+            if (persisted) {
+                viewModel.updateSettings { it.copy(outputDirectoryUri = uri.toString()) }
+            } else {
+                Toast.makeText(context, "Could not keep permission for that folder. Choose another folder.", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
 
     androidx.compose.ui.window.Dialog(
         onDismissRequest = onDismiss,
@@ -173,7 +200,7 @@ fun ExportScreen(
                                     ) {
                                         OutlinedButton(
                                             onClick = {
-                                                val outFile = createStagingExportFile(context, settings.container.name.lowercase())
+                                                val outFile = createStagingExportFile(context, settings.outputFileName, settings.container.name.lowercase())
                                                 BatchExportManager.enqueueExport(project, settings, outFile)
                                             },
                                             modifier = Modifier.weight(1f).height(if (compactHeight) 48.dp else 56.dp),
@@ -187,7 +214,7 @@ fun ExportScreen(
                                                 if (queueState.isNotEmpty()) {
                                                     BatchExportManager.startQueuedExports(context)
                                                 } else {
-                                                    val outFile = createStagingExportFile(context, settings.container.name.lowercase())
+                                                    val outFile = createStagingExportFile(context, settings.outputFileName, settings.container.name.lowercase())
                                                     BatchExportManager.startExport(context, project, settings, outFile)
                                                 }
                                             },
@@ -210,6 +237,17 @@ fun ExportScreen(
                                 ExportPresetSelector(
                                     selectedPreset = uiState.selectedPreset,
                                     onPresetSelected = { viewModel.selectPreset(it) }
+                                )
+                            }
+                            item { HorizontalDivider() }
+                            item {
+                                ExportOutputPanel(
+                                    settings = settings,
+                                    onSettingsChanged = { viewModel.updateSettings { _ -> it } },
+                                    onChooseFolder = { outputFolderPicker.launch(null) },
+                                    onUseDefaultFolder = {
+                                        viewModel.updateSettings { it.copy(outputDirectoryUri = "") }
+                                    }
                                 )
                             }
                             item { HorizontalDivider() }
@@ -238,6 +276,8 @@ fun ExportScreen(
                             item { HorizontalDivider() }
                             item {
                                 ExportAdvancedPanel(
+                                    settings = settings,
+                                    onSettingsChanged = { viewModel.updateSettings { _ -> it } },
                                     onExportLut = { onExportLut(33) } // default sizing
                                 )
                             }

@@ -115,6 +115,7 @@ class ExportSettingsDefaultsTest {
         assertEquals(100, result.frameRate.denominator)
         assertEquals(44_100, result.audioSampleRate)
         assertEquals(1, result.audioChannels)
+        assertTrue(result.includeAudio)
     }
 
     @Test
@@ -181,6 +182,46 @@ class ExportSettingsDefaultsTest {
         assertEquals(ExportAudioSettings.AudioCodec.AAC, result.audioCodec)
         assertFalse(result.normalizeAudio)
         assertFalse(result.includeWatermark)
+    }
+
+    @Test
+    fun projectsWithoutCompatibleEmbeddedAudioDefaultToVideoOnly() {
+        val source = asset("source", FrameRate(30, 1))
+        val project = project(clip("clip", source.assetId), assets = listOf(source))
+
+        val result = ExportSettingsDefaults.adaptToSimpleSource(settings(), project)
+
+        assertFalse(result.includeAudio)
+    }
+
+    @Test
+    fun defaultLandscapePresetCanMatchPortraitProjectWithoutRotatingTheProject() {
+        val source = asset("source", FrameRate(30, 1))
+        val landscapeProject = project(clip("clip", source.assetId), assets = listOf(source))
+        val portraitProject = landscapeProject.copy(
+            settings = landscapeProject.settings.copy(resolutionWidth = 1080, resolutionHeight = 1920)
+        )
+
+        val result = ExportSettingsDefaults.adaptToSimpleSource(
+            settings(),
+            portraitProject,
+            matchProjectOrientation = true
+        )
+
+        assertEquals(1080, result.resolutionWidth)
+        assertEquals(1920, result.resolutionHeight)
+    }
+
+    @Test
+    fun resolutionOptionsPreserveOrientationAndStayWithinAdapterLimits() {
+        val landscape = ExportSettingsDefaults.resolutionOptions(1920, 1080)
+        val portrait = ExportSettingsDefaults.resolutionOptions(1080, 1920)
+
+        assertEquals("720p", landscape.first().label)
+        assertEquals(3840, landscape.last().width)
+        assertEquals(2160, landscape.last().height)
+        assertEquals(2160, portrait.last().width)
+        assertEquals(3840, portrait.last().height)
     }
 
     @Test

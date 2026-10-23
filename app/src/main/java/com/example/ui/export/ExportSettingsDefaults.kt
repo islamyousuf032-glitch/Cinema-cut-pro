@@ -16,14 +16,22 @@ import kotlin.math.roundToInt
 
 /** Defaults and UI mappings for the currently implemented Media3 H.264/MP4 export path. */
 internal object ExportSettingsDefaults {
+    data class ResolutionOption(val width: Int, val height: Int, val label: String)
+
     private data class ActiveSource(val asset: MediaAsset)
 
-    fun adaptToSimpleSource(settings: ExportSettings, project: TimelineProject): ExportSettings {
-        val activeSources = project.tracks
-            .filter { it.type == TrackType.VIDEO && it.isVisible }
-            .flatMap { track -> track.clips.filter { it.isEnabled }.mapNotNull { clip ->
-                project.mediaAssets.firstOrNull { it.assetId == clip.mediaId }?.let(::ActiveSource)
-            } }
+    fun adaptToSimpleSource(
+        settings: ExportSettings,
+        project: TimelineProject,
+        matchProjectOrientation: Boolean = false
+    ): ExportSettings {
+        val activeVideoTracks = project.tracks
+            .filter { it.type == TrackType.VIDEO && it.isVisible && it.clips.any { clip -> clip.isEnabled } }
+        val activeVideoTrack = activeVideoTracks.singleOrNull()
+        val activeVideoClips = activeVideoTrack?.clips?.filter { it.isEnabled }.orEmpty()
+        val activeSources = activeVideoClips.mapNotNull { clip ->
+            project.mediaAssets.firstOrNull { it.assetId == clip.mediaId }?.let(::ActiveSource)
+        }
 
         val sourceRate = commonConstantFrameRate(activeSources)
         val projectRate = project.settings.getFpsRational()
@@ -32,6 +40,19 @@ internal object ExportSettingsDefaults {
         val requestedRate = sourceRate ?: projectRate ?: settings.frameRate
 
         val commonAudio = commonEmbeddedAudioFormat(activeSources)
+        val canIncludeAudio = activeVideoTrack?.isMuted == false && activeVideoClips.isNotEmpty() &&
+            activeSources.size == activeVideoClips.size && activeSources.all { it.asset.metadata.hasAudio } &&
+            commonAudio != null
+        val (outputWidth, outputHeight) = if (matchProjectOrientation) {
+            resolutionMatchingProject(
+                settings.resolutionWidth,
+                settings.resolutionHeight,
+                project.settings.resolutionWidth,
+                project.settings.resolutionHeight
+            )
+        } else {
+            settings.resolutionWidth to settings.resolutionHeight
+        }
         val requestedMode = when (settings.bitrateMode) {
             ExportSettings.BitrateMode.CRF,
             ExportSettings.BitrateMode.AUTO -> ExportSettings.BitrateMode.VBR
@@ -40,6 +61,8 @@ internal object ExportSettingsDefaults {
         val safeVideoBitrate = settings.videoBitrate.coerceAtLeast(1)
 
         return settings.copy(
+            resolutionWidth = outputWidth,
+            resolutionHeight = outputHeight,
             frameRate = requestedRate,
             codec = ExportCodec.H264,
             container = ExportContainer.MP4,
@@ -53,12 +76,65 @@ internal object ExportSettingsDefaults {
             colorOutput = ExportColorSettings.ColorOutput.Rec709,
             toneMappingMode = ExportColorSettings.ToneMappingMode.STANDARD,
             audioCodec = ExportAudioSettings.AudioCodec.AAC,
+            includeAudio = settings.includeAudio && canIncludeAudio,
             audioSampleRate = commonAudio?.first ?: settings.audioSampleRate.coerceAtLeast(1),
             audioChannels = commonAudio?.second ?: settings.audioChannels.coerceIn(1, 2),
             normalizeAudio = false,
             includeWatermark = false,
             watermarkSettings = settings.watermarkSettings?.copy(enabled = false)
         )
+    }
+
+    fun resolutionOptions(width: Int, height: Int): List<ResolutionOption> {
+        val safeWidth = width.coerceAtLeast(2)
+        val safeHeight = height.coerceAtLeast(2)
+        val aspectRatio = safeWidth.toDouble() / safeHeight.toDouble()
+        val aspectScale = maxOf(aspectRatio, 1.0 / aspectRatio)
+        val maxShortEdge = minOf(2160, (3840.0 / aspectScale).toInt()).coerceAtLeast(2)
+        val targets = listOf(720, 1080, 1440, 2160).filter { it <= maxShortEdge }.ifEmpty { listOf(maxShortEdge) }
+
+        return targets.map { shortEdge ->
+            val dimensions = dimensionsAtShortEdge(shortEdge, aspectRatio)
+            val label = when {
+                minOf(dimensions.first, dimensions.second) == 720 -> "720p"
+                minOf(dimensions.first, dimensions.second) == 1080 -> "1080p"
+                minOf(dimensions.first, dimensions.second) == 1440 -> "1440p"
+                maxOf(dimensions.first, dimensions.second) >= 3840 -> "4K"
+                else -> "${dimensions.first}×${dimensions.second}"
+            }
+            ResolutionOption(dimensions.first, dimensions.second, label)
+        }.distinctBy { it.width to it.height }
+    }
+
+    fun resolutionMatchingProject(
+        requestedWidth: Int,
+        requestedHeight: Int,
+        projectWidth: Int,
+        projectHeight: Int
+    ): Pair<Int, Int> {
+        if (projectWidth <= 0 || projectHeight <= 0) return requestedWidth to requestedHeight
+        val aspectRatio = projectWidth.toDouble() / projectHeight.toDouble()
+        val requestedShortEdge = minOf(requestedWidth, requestedHeight).coerceAtLeast(2)
+        val projectShortEdge = minOf(projectWidth, projectHeight)
+        val aspectScale = maxOf(aspectRatio, 1.0 / aspectRatio)
+        val maxShortEdge = minOf(projectShortEdge, 2160, (3840.0 / aspectScale).toInt()).coerceAtLeast(2)
+        val shortEdge = minOf(requestedShortEdge, maxShortEdge)
+        return dimensionsAtShortEdge(shortEdge, aspectRatio)
+    }
+
+    private fun dimensionsAtShortEdge(shortEdge: Int, aspectRatio: Double): Pair<Int, Int> {
+        val safeShortEdge = shortEdge.coerceAtLeast(2)
+        val aspectScale = maxOf(aspectRatio, 1.0 / aspectRatio)
+        val boundedShortEdge = minOf(safeShortEdge, 2160, (3840.0 / aspectScale).toInt()).coerceAtLeast(2)
+        return if (aspectRatio >= 1.0) {
+            val height = (boundedShortEdge / 2) * 2
+            val width = (((height * aspectRatio).roundToInt()) / 2) * 2
+            width.coerceAtLeast(2) to height.coerceAtLeast(2)
+        } else {
+            val width = (boundedShortEdge / 2) * 2
+            val height = (((width / aspectRatio).roundToInt()) / 2) * 2
+            width.coerceAtLeast(2) to height.coerceAtLeast(2)
+        }
     }
 
     fun bitrateForQualityPreset(

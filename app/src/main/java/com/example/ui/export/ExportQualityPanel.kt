@@ -21,19 +21,24 @@ fun ExportQualityPanel(
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Text("Video Quality", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
 
-        val resOptions = listOf(1280 to 720, 1920 to 1080, 3840 to 2160)
+        val resOptions = ExportSettingsDefaults.resolutionOptions(settings.resolutionWidth, settings.resolutionHeight)
         Column {
             Text("Resolution", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                "Output orientation is preserved; scaling fits the image without cropping.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
-                resOptions.forEach { (width, height) ->
+                resOptions.forEach { option ->
                     FilterChip(
-                        selected = settings.resolutionWidth == width && settings.resolutionHeight == height,
+                        selected = settings.resolutionWidth == option.width && settings.resolutionHeight == option.height,
                         onClick = {
-                            val updated = settings.copy(resolutionWidth = width, resolutionHeight = height)
+                            val updated = settings.copy(resolutionWidth = option.width, resolutionHeight = option.height)
                             val presetBitrate = ExportSettingsDefaults.bitrateForQualityPreset(
                                 updated.qualityPreset,
-                                width,
-                                height,
+                                option.width,
+                                option.height,
                                 updated.frameRate
                             )
                             onSettingsChanged(
@@ -41,7 +46,7 @@ fun ExportQualityPanel(
                                 else updated.copy(videoBitrate = presetBitrate, maxBitrate = presetBitrate)
                             )
                         },
-                        label = { Text("${height}p") }
+                        label = { Text(option.label) }
                     )
                 }
             }
