@@ -29,6 +29,8 @@ data class MediaAsset(
     val assetType: MediaAssetType,
     val previewStatus: PreviewStatus = PreviewStatus.NOT_TESTED,
     val proxyStatus: ProxyStatus = ProxyStatus.NONE,
+    /** WorkManager request currently responsible for this asset's persisted GENERATING state. */
+    val proxyWorkId: String? = null,
     val mediaErrorStatus: MediaErrorStatus = MediaErrorStatus.NONE,
     val mediaAvailabilityStatus: MediaAvailabilityStatus = MediaAvailabilityStatus.AVAILABLE_ORIGINAL_URI,
     val metadata: MediaMetadata,

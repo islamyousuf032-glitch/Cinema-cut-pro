@@ -1,11 +1,13 @@
 package com.example.timeline.media
 
 import android.content.Context
+import android.net.Uri
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import androidx.work.Data
 import androidx.media3.transformer.ExportException
 import kotlinx.coroutines.CancellationException
+import java.io.File
 
 class ProxyGenerationWorker(
     appContext: Context,
@@ -44,6 +46,16 @@ class ProxyGenerationWorker(
             ?: return invalidInput("Proxy source URI is missing.")
         val outputUriString = inputData.getString(KEY_OUTPUT_URI)
             ?: return invalidInput("Proxy output URI is missing.")
+        if (sourceUriString.isBlank()) return invalidInput("Proxy source URI is empty.")
+        if (outputUriString.isBlank()) return invalidInput("Proxy output URI is empty.")
+        val sourceUri = Uri.parse(sourceUriString)
+        if (sourceUri.scheme.isNullOrBlank()) {
+            return invalidInput("Proxy source must be a readable file or content URI.")
+        }
+        val outputUri = Uri.parse(outputUriString)
+        if (outputUri.scheme != "file" || outputUri.path.isNullOrBlank()) {
+            return invalidInput("Proxy output must be a local file URI.")
+        }
         
         val sourceWidth = inputData.getInt(KEY_SOURCE_WIDTH, 1920)
         val sourceHeight = inputData.getInt(KEY_SOURCE_HEIGHT, 1080)
@@ -59,15 +71,24 @@ class ProxyGenerationWorker(
             forceSdr = true
         )
         
+        try {
+            setForeground(ProxyForegroundNotification.create(applicationContext, id, progressPercent = null))
+        } catch (failure: Exception) {
+            return Result.failure(
+                Data.Builder().putString(KEY_ERROR_MSG, describeFailure(failure)).build()
+            )
+        }
+
         val backend = Media3TranscoderBackend(applicationContext)
         var success = false
         var isCancelledLocally = false
         var failureMessage: String? = null
+        var lastForegroundPercent = -1
         
         try {
             backend.transcode(
-                android.net.Uri.parse(sourceUriString), 
-                android.net.Uri.parse(outputUriString), 
+                sourceUri,
+                outputUri,
                 settings
             ).collect { progress ->
                 if (isStopped) {
@@ -81,11 +102,17 @@ class ProxyGenerationWorker(
                         setProgress(Data.Builder().putInt(KEY_PROGRESS, 0).putString(KEY_STATUS, "ANALYZING").build())
                     }
                     is TranscodeProgress.Progress -> {
-                        val pct = (progress.percent * 100).toInt()
+                        val pct = (progress.percent * 100).toInt().coerceIn(0, 99)
                         setProgress(Data.Builder().putInt(KEY_PROGRESS, pct).putString(KEY_STATUS, "RUNNING").build())
+                        if (pct != lastForegroundPercent) {
+                            setForeground(ProxyForegroundNotification.create(applicationContext, id, pct))
+                            lastForegroundPercent = pct
+                        }
                     }
                     is TranscodeProgress.Completed -> {
-                        setProgress(Data.Builder().putInt(KEY_PROGRESS, 100).putString(KEY_STATUS, "COMPLETED").build())
+                        // Completion from Transformer is only provisional until the MP4 can be
+                        // reopened and its encoded video (and requested audio) samples are checked.
+                        setProgress(Data.Builder().putInt(KEY_PROGRESS, 99).putString(KEY_STATUS, "VALIDATING").build())
                         success = true
                     }
                     is TranscodeProgress.Error -> {
@@ -107,15 +134,30 @@ class ProxyGenerationWorker(
 
         if (isCancelledLocally || isStopped) return Result.failure()
 
-        return if (success) {
-            Result.success(Data.Builder().putString(KEY_OUTPUT_URI, outputUriString).build())
-        } else {
-            Result.failure(
-                Data.Builder()
-                    .putString(KEY_ERROR_MSG, failureMessage ?: "Media3 Transformer did not complete proxy generation.")
-                    .build()
-            )
+        if (success) {
+            val outputFile = outputUri.path?.let(::File)
+                ?: return Result.failure(
+                    Data.Builder()
+                        .putString(KEY_ERROR_MSG, "Proxy output file path is unavailable.")
+                        .build()
+                )
+            try {
+                ProxyOutputValidator.verify(outputFile, expectAudio = hasAudio)
+            } catch (failure: Exception) {
+                outputFile.delete()
+                return Result.failure(
+                    Data.Builder().putString(KEY_ERROR_MSG, describeFailure(failure)).build()
+                )
+            }
+            setProgress(Data.Builder().putInt(KEY_PROGRESS, 100).putString(KEY_STATUS, "COMPLETED").build())
+            return Result.success(Data.Builder().putString(KEY_OUTPUT_URI, outputUriString).build())
         }
+
+        return Result.failure(
+            Data.Builder()
+                .putString(KEY_ERROR_MSG, failureMessage ?: "Media3 Transformer did not complete proxy generation.")
+                .build()
+        )
     }
 
     companion object {

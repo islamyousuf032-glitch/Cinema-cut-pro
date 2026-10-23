@@ -13,6 +13,8 @@
 1. A player error while a READY proxy was selected changed the persisted *generation* status to FAILED. This did not distinguish a malformed proxy from a renderer, frame-processing, or color-effect error. Proxy playback failure is now tracked separately, and the original is selected without erasing successful generation state.
 2. The Color screen switches to Media3 but previously inherited smooth-preview proxy preference. Color grading now forces original-media selection for the duration of that screen. Frame-processing/shader failures are not written back as source/proxy failures; Media3 also retries once without the optional GPU effect for that source.
 3. Transformer wrote directly to the final proxy path. It now writes a sibling `.pending-….mp4` and publishes it with a same-filesystem atomic rename only after Transformer completion and non-empty-file validation, so readers never see a partial output as the completed proxy.
+4. Proxy work was not promoted to a foreground worker, and the project stored only `GENERATING` while the completion observer lived in the current ViewModel. Long transcodes could be stopped by Android, and a process recreation could leave a stale `GENERATING` state. Proxy jobs now run through WorkManager's foreground service, record their work id in project state before enqueueing, reattach on project reload, and turn missing/stale work into a retryable failure instead of a permanent spinner.
+5. A WorkManager success result previously trusted Transformer completion plus a non-empty file. The worker now reopens the MP4 and checks for a readable video sample and, when requested, a readable audio sample before reporting success. This is a structural check, not full decode or device-playback proof.
 
 ## Desktop NLE research and adaptation
 
@@ -25,5 +27,7 @@
 1. Record the file's container, video codec/profile, reported bit depth if available, transfer (SDR/HLG/PQ), resolution, frame rate, and rotation. Do not share private media unless comfortable doing so.
 2. Generate a proxy and confirm it reaches READY; switch away and back to the clip; open Color; change one grade parameter; scrub and play; leave Color; test both Media3 and LibVLC preview.
 3. If failure remains, provide the app's sanitized playback/proxy error text plus device model, Android version, selected preview engine, and the action that triggers it. The actual exported file or a short sample is needed before making codec-specific conclusions.
+
+The lifecycle defects above are verified from source, but they do not establish the cause of any particular codec/transcoder failure reported by the user. If a proxy still fails after these changes, the sanitized in-app error and exact source metadata/log are still needed before making a format-specific diagnosis.
 
 The app remains a Media3-based editor: these changes do not add a promise of support for every codec, a general FFmpeg backend, RAW/MCRAW decoding, or full NLE transition processing through Transformer.

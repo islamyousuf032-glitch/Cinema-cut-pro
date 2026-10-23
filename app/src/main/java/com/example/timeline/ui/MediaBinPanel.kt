@@ -2,6 +2,8 @@ package com.example.timeline.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -121,6 +123,7 @@ fun MediaAssetItem(
 ) {
     var showMenu by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
     var showTechReport by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+    var showProxyError by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
 
     Card(
         modifier = Modifier
@@ -194,7 +197,14 @@ fun MediaAssetItem(
                                  color = MaterialTheme.colorScheme.onSurfaceVariant,
                                  style = MaterialTheme.typography.labelSmall,
                                  maxLines = 2,
-                                 overflow = TextOverflow.Ellipsis
+                                 overflow = TextOverflow.Ellipsis,
+                                 modifier = Modifier.clickable { showProxyError = true }
+                             )
+                             Text(
+                                 text = "Details",
+                                 color = MaterialTheme.colorScheme.primary,
+                                 style = MaterialTheme.typography.labelSmall,
+                                 modifier = Modifier.clickable { showProxyError = true }
                              )
                          }
                      }
@@ -332,6 +342,23 @@ fun MediaAssetItem(
             },
             confirmButton = {
                 TextButton(onClick = { showTechReport = false }) {
+                    Text("OK")
+                }
+            }
+        )
+    }
+
+    if (showProxyError && asset.proxyStatus == ProxyStatus.FAILED) {
+        AlertDialog(
+            onDismissRequest = { showProxyError = false },
+            title = { Text("Proxy Generation Failed") },
+            text = {
+                Column(Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState())) {
+                    Text(asset.errorMessage ?: "Proxy generation failed without an error message.")
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showProxyError = false }) {
                     Text("OK")
                 }
             }

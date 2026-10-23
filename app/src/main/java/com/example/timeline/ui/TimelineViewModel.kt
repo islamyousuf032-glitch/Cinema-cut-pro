@@ -26,7 +26,9 @@ import com.example.timeline.media.PreviewStatus
 import com.example.timeline.media.ProxyStatus
 import com.example.timeline.media.MediaErrorStatus
 import com.example.timeline.media.ProxyInfo
+import com.example.timeline.media.ProxyGenerationRecovery
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -46,6 +48,7 @@ class TimelineViewModel(context: Context) : ViewModel() {
     private val _proxyProgress = MutableStateFlow<Map<String, Float>>(emptyMap())
     val proxyProgress: StateFlow<Map<String, Float>> = _proxyProgress.asStateFlow()
     private val activeProxyJobs = mutableMapOf<String, UUID>()
+    private val proxyObservationJobs = mutableMapOf<String, Job>()
     private val automaticProxyRequests = mutableSetOf<String>()
     private val cadenceReanalysisJobs = mutableMapOf<String, Job>()
     private val autosaveManager = AutosaveManager(
@@ -134,19 +137,43 @@ class TimelineViewModel(context: Context) : ViewModel() {
     }
 
     fun loadProject(project: TimelineProject) {
+        val recoveredProject = project.copy(
+            mediaAssets = project.mediaAssets.map { asset ->
+                when {
+                    ProxyGenerationRecovery.wasInterrupted(asset.proxyStatus, asset.proxyWorkId) -> asset.copy(
+                        proxyStatus = ProxyStatus.FAILED,
+                        proxyWorkId = null,
+                        proxyPlaybackFailure = null,
+                        errorMessage = ProxyGenerationRecovery.INTERRUPTED_MESSAGE
+                    )
+                    asset.proxyStatus != ProxyStatus.GENERATING && asset.proxyWorkId != null ->
+                        asset.copy(proxyWorkId = null)
+                    else -> asset
+                }
+            }
+        )
         historyManager.clear()
         _playheadFrame.value = 0L
-        _uiState.update { 
+        proxyObservationJobs.values.forEach { it.cancel() }
+        proxyObservationJobs.clear()
+        activeProxyJobs.clear()
+        _proxyProgress.value = emptyMap()
+        _uiState.update {
             it.copy(
-                project = project,
+                project = recoveredProject,
                 showProjectSetup = false,
                 selectedClipId = null,
                 canUndo = false,
                 canRedo = false
             )
         }
-        autosaveManager.markDirty(project)
-        reanalyzeUnverifiedVideoCadence(project)
+        autosaveManager.markDirty(recoveredProject)
+        recoveredProject.mediaAssets.forEach { asset ->
+            ProxyGenerationRecovery.workIdFor(asset.proxyStatus, asset.proxyWorkId)?.let { workId ->
+                observeProxyJob(asset, workId)
+            }
+        }
+        reanalyzeUnverifiedVideoCadence(recoveredProject)
     }
 
     /** Re-probes legacy projects whose schema predates the persisted timestamp-cadence result. */
@@ -338,95 +365,192 @@ class TimelineViewModel(context: Context) : ViewModel() {
     }
 
     fun generateProxyForAsset(asset: MediaAsset) {
-        val workId = importWorkManager.startProxyJob(asset)
-        activeProxyJobs[asset.assetId] = workId
-        _proxyProgress.value = _proxyProgress.value.toMutableMap().apply { this[asset.assetId] = 0f }
+        val request = try {
+            importWorkManager.createProxyRequest(asset)
+        } catch (error: Exception) {
+            markProxyGenerationFailed(asset.assetId, null, error.message ?: "Could not prepare proxy generation.")
+            return
+        }
+        val workId = request.id
 
-        viewModelScope.launch {
-            workManager.getWorkInfoByIdFlow(workId).collect { workInfo ->
-                if (workInfo == null) return@collect
-
-                val isTerminal = workInfo.state == WorkInfo.State.SUCCEEDED ||
-                    workInfo.state == WorkInfo.State.FAILED ||
-                    workInfo.state == WorkInfo.State.CANCELLED
-                // A delayed observation from an older request must never overwrite the state of a
-                // newer retry for the same asset.
-                if (activeProxyJobs[asset.assetId] != workId) {
-                    if (isTerminal) kotlinx.coroutines.currentCoroutineContext().cancel()
-                    return@collect
-                }
-
-                val progress = workInfo.progress.getInt(ProxyGenerationWorker.KEY_PROGRESS, 0)
-                _proxyProgress.value = _proxyProgress.value.toMutableMap().apply {
-                    this[asset.assetId] = progress.coerceIn(0, 100) / 100f
-                }
-
-                val stateNow = _uiState.value
-                when (workInfo.state) {
-                    WorkInfo.State.SUCCEEDED -> {
-                        val outputUri = workInfo.outputData.getString(ProxyGenerationWorker.KEY_OUTPUT_URI)
-                        val updatedAssets = stateNow.project.mediaAssets.map { current ->
-                            if (current.assetId != asset.assetId) current
-                            else if (outputUri == null) current.copy(
-                                proxyStatus = ProxyStatus.FAILED,
-                                proxyPlaybackFailure = null,
-                                errorMessage = "Proxy worker completed without an output file."
-                            ) else {
-                                val (proxyWidth, proxyHeight) = proxyDimensions(current.metadata.width, current.metadata.height)
-                                current.copy(
-                                    proxyStatus = ProxyStatus.READY,
-                                    proxyPlaybackFailure = null,
-                                    errorMessage = null,
-                                    proxyInfo = ProxyInfo(
-                                        uriString = outputUri,
-                                        width = proxyWidth,
-                                        height = proxyHeight,
-                                        frameRate = current.metadata.estimatedFrameRate?.fpsAsFloat ?: 30f,
-                                        isProxyGenerated = true,
-                                        proxyFormat = "mp4",
-                                        proxyMimeType = "video/mp4"
-                                    )
-                                )
-                            }
-                        }
-                        updateState(stateNow.project.copy(mediaAssets = updatedAssets))
-                    }
-                    WorkInfo.State.FAILED -> {
-                        val errorMsg = workInfo.outputData.getString(ProxyGenerationWorker.KEY_ERROR_MSG)
-                            ?: workInfo.progress.getString(ProxyGenerationWorker.KEY_ERROR_MSG)
-                            ?: "Proxy generation failed."
-                        val updatedAssets = stateNow.project.mediaAssets.map { current ->
-                            if (current.assetId == asset.assetId) current.copy(
-                                proxyStatus = ProxyStatus.FAILED,
-                                proxyPlaybackFailure = null,
-                                errorMessage = errorMsg
-                            ) else current
-                        }
-                        updateState(stateNow.project.copy(mediaAssets = updatedAssets))
-                    }
-                    WorkInfo.State.CANCELLED -> {
-                        val restoreStatus = asset.proxyStatus.takeUnless { it == ProxyStatus.GENERATING } ?: ProxyStatus.NONE
-                        val updatedAssets = stateNow.project.mediaAssets.map { current ->
-                            if (current.assetId == asset.assetId) current.copy(
-                                proxyStatus = restoreStatus,
-                                proxyPlaybackFailure = asset.proxyPlaybackFailure,
-                                errorMessage = asset.errorMessage
-                            ) else current
-                        }
-                        updateState(stateNow.project.copy(mediaAssets = updatedAssets))
-                    }
-                    else -> Unit
-                }
-
-                if (workInfo.state == WorkInfo.State.SUCCEEDED ||
-                    workInfo.state == WorkInfo.State.FAILED ||
-                    workInfo.state == WorkInfo.State.CANCELLED
-                ) {
-                    if (activeProxyJobs[asset.assetId] == workId) activeProxyJobs.remove(asset.assetId)
-                    _proxyProgress.value = _proxyProgress.value - asset.assetId
-                    kotlinx.coroutines.currentCoroutineContext().cancel()
-                }
+        // Record the WorkManager id in project state before enqueue. On reload, this lets the
+        // ViewModel reconnect to the request instead of relying on a live-screen observer.
+        val currentProject = _uiState.value.project
+        val withWorkId = currentProject.copy(
+            mediaAssets = currentProject.mediaAssets.map { current ->
+                if (current.assetId == asset.assetId && current.proxyStatus == ProxyStatus.GENERATING) {
+                    current.copy(proxyWorkId = workId.toString())
+                } else current
             }
+        )
+        updateState(withWorkId)
+
+        try {
+            importWorkManager.enqueueProxyRequest(request)
+        } catch (error: Exception) {
+            markProxyGenerationFailed(
+                asset.assetId,
+                workId,
+                error.message ?: "Could not enqueue proxy generation."
+            )
+            return
+        }
+        observeProxyJob(asset, workId)
+    }
+
+    private fun observeProxyJob(asset: MediaAsset, workId: UUID) {
+        proxyObservationJobs.remove(asset.assetId)?.cancel()
+        activeProxyJobs[asset.assetId] = workId
+        _proxyProgress.value = _proxyProgress.value.toMutableMap().apply {
+            if (!containsKey(asset.assetId)) this[asset.assetId] = 0f
+        }
+
+        val observerJob = viewModelScope.launch(start = CoroutineStart.LAZY) {
+            try {
+                workManager.getWorkInfoByIdFlow(workId).collect { workInfo ->
+                    val isTerminal = workInfo?.state == WorkInfo.State.SUCCEEDED ||
+                        workInfo?.state == WorkInfo.State.FAILED ||
+                        workInfo?.state == WorkInfo.State.CANCELLED
+                    // A delayed observation from an older request must never overwrite the state of a
+                    // newer retry for the same asset.
+                    if (activeProxyJobs[asset.assetId] != workId) {
+                        if (isTerminal) kotlinx.coroutines.currentCoroutineContext().cancel()
+                        return@collect
+                    }
+
+                    if (workInfo == null) {
+                        markProxyGenerationFailed(
+                            asset.assetId,
+                            workId,
+                            ProxyGenerationRecovery.MISSING_WORK_MESSAGE
+                        )
+                        finishProxyObservation(asset.assetId, workId)
+                        kotlinx.coroutines.currentCoroutineContext().cancel()
+                        return@collect
+                    }
+
+                    val progress = workInfo.progress.getInt(ProxyGenerationWorker.KEY_PROGRESS, 0)
+                    _proxyProgress.value = _proxyProgress.value.toMutableMap().apply {
+                        this[asset.assetId] = progress.coerceIn(0, 100) / 100f
+                    }
+
+                    val stateNow = _uiState.value
+                    when (workInfo.state) {
+                        WorkInfo.State.SUCCEEDED -> {
+                            val outputUri = workInfo.outputData.getString(ProxyGenerationWorker.KEY_OUTPUT_URI)
+                            val outputFile = outputUri?.let { uriString ->
+                                runCatching { Uri.parse(uriString) }.getOrNull()
+                                    ?.takeIf { it.scheme == "file" }
+                                    ?.path
+                                    ?.let(::File)
+                                    ?.takeIf { it.isFile && it.length() > 0L }
+                            }
+                            val updatedAssets = stateNow.project.mediaAssets.map { current ->
+                                if (current.assetId != asset.assetId) current
+                                else if (outputUri == null || outputFile == null) current.copy(
+                                    proxyStatus = ProxyStatus.FAILED,
+                                    proxyWorkId = null,
+                                    proxyPlaybackFailure = null,
+                                    errorMessage = "Proxy worker reported success, but its output file is missing or empty."
+                                ) else {
+                                    val (proxyWidth, proxyHeight) = proxyDimensions(current.metadata.width, current.metadata.height)
+                                    current.copy(
+                                        proxyStatus = ProxyStatus.READY,
+                                        proxyWorkId = null,
+                                        proxyPlaybackFailure = null,
+                                        errorMessage = null,
+                                        proxyInfo = ProxyInfo(
+                                            uriString = outputUri,
+                                            width = proxyWidth,
+                                            height = proxyHeight,
+                                            frameRate = current.metadata.estimatedFrameRate?.fpsAsFloat ?: 30f,
+                                            isProxyGenerated = true,
+                                            proxyFormat = "mp4",
+                                            proxyMimeType = "video/mp4"
+                                        )
+                                    )
+                                }
+                            }
+                            updateState(stateNow.project.copy(mediaAssets = updatedAssets))
+                        }
+                        WorkInfo.State.FAILED -> {
+                            val errorMsg = workInfo.outputData.getString(ProxyGenerationWorker.KEY_ERROR_MSG)
+                                ?: workInfo.progress.getString(ProxyGenerationWorker.KEY_ERROR_MSG)
+                                ?: "Proxy generation failed."
+                            val updatedAssets = stateNow.project.mediaAssets.map { current ->
+                                if (current.assetId == asset.assetId) current.copy(
+                                    proxyStatus = ProxyStatus.FAILED,
+                                    proxyWorkId = null,
+                                    proxyPlaybackFailure = null,
+                                    errorMessage = errorMsg
+                                ) else current
+                            }
+                            updateState(stateNow.project.copy(mediaAssets = updatedAssets))
+                        }
+                        WorkInfo.State.CANCELLED -> {
+                            val restoreStatus = asset.proxyStatus.takeUnless { it == ProxyStatus.GENERATING }
+                                ?: if (stateNow.project.mediaAssets.firstOrNull { it.assetId == asset.assetId }?.proxyInfo != null) {
+                                    ProxyStatus.READY
+                                } else {
+                                    ProxyStatus.NONE
+                                }
+                            val updatedAssets = stateNow.project.mediaAssets.map { current ->
+                                if (current.assetId == asset.assetId) current.copy(
+                                    proxyStatus = restoreStatus,
+                                    proxyWorkId = null,
+                                    proxyPlaybackFailure = asset.proxyPlaybackFailure,
+                                    errorMessage = asset.errorMessage
+                                ) else current
+                            }
+                            updateState(stateNow.project.copy(mediaAssets = updatedAssets))
+                        }
+                        else -> Unit
+                    }
+
+                    if (isTerminal) {
+                        finishProxyObservation(asset.assetId, workId)
+                        kotlinx.coroutines.currentCoroutineContext().cancel()
+                    }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                markProxyGenerationFailed(
+                    asset.assetId,
+                    workId,
+                    error.message ?: "Could not observe proxy generation."
+                )
+                finishProxyObservation(asset.assetId, workId)
+            }
+        }
+        proxyObservationJobs[asset.assetId] = observerJob
+        observerJob.start()
+    }
+
+    private fun markProxyGenerationFailed(assetId: String, workId: UUID?, message: String) {
+        val stateNow = _uiState.value
+        val workIdString = workId?.toString()
+        val updatedAssets = stateNow.project.mediaAssets.map { current ->
+            val belongsToRequest = workIdString == null || current.proxyWorkId == workIdString
+            if (current.assetId == assetId && current.proxyStatus == ProxyStatus.GENERATING && belongsToRequest) {
+                current.copy(
+                    proxyStatus = ProxyStatus.FAILED,
+                    proxyWorkId = null,
+                    proxyPlaybackFailure = null,
+                    errorMessage = message.take(700)
+                )
+            } else current
+        }
+        if (updatedAssets != stateNow.project.mediaAssets) {
+            updateState(stateNow.project.copy(mediaAssets = updatedAssets))
+        }
+    }
+
+    private fun finishProxyObservation(assetId: String, workId: UUID) {
+        if (activeProxyJobs[assetId] == workId) {
+            activeProxyJobs.remove(assetId)
+            proxyObservationJobs.remove(assetId)
+            _proxyProgress.value = _proxyProgress.value - assetId
         }
     }
     
@@ -507,6 +631,7 @@ class TimelineViewModel(context: Context) : ViewModel() {
             mediaAssets = _uiState.value.project.mediaAssets.map {
                 if (it.assetId == assetId) it.copy(
                     proxyStatus = ProxyStatus.GENERATING,
+                    proxyWorkId = null,
                     proxyPlaybackFailure = null
                 ) else it
             }
