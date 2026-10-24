@@ -1,6 +1,9 @@
 package com.example.ui.export
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.*
@@ -9,7 +12,9 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import com.example.timeline.export.BatchExportManager
 import com.example.timeline.export.service.ExportState
@@ -22,6 +27,7 @@ fun ExportProgressScreen(
     onRetry: () -> Unit
 ) {
     val context = LocalContext.current
+    val clipboardManager = LocalClipboardManager.current
 
     Scaffold(
         topBar = {
@@ -101,7 +107,15 @@ fun ExportProgressScreen(
                     }
                 }
                 is ExportState.Error -> {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(32.dp)) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .fillMaxHeight(0.9f)
+                            .verticalScroll(rememberScrollState())
+                            .padding(32.dp)
+                    ) {
                         Icon(
                             painter = androidx.compose.ui.res.painterResource(id = android.R.drawable.ic_dialog_alert),
                             contentDescription = "Error",
@@ -111,8 +125,14 @@ fun ExportProgressScreen(
                         Spacer(modifier = Modifier.height(24.dp))
                         Text("Export Failed", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.error)
                         Spacer(modifier = Modifier.height(8.dp))
-                        Text(state.message, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
-                        Spacer(modifier = Modifier.height(32.dp))
+                        SelectionContainer {
+                            Text(state.message, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
+                        }
+                        Spacer(modifier = Modifier.height(12.dp))
+                        TextButton(onClick = { clipboardManager.setText(AnnotatedString(state.message)) }) {
+                            Text("Copy error details")
+                        }
+                        Spacer(modifier = Modifier.height(20.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                             Button(onClick = onRetry) {
                                 Text("Try Again")

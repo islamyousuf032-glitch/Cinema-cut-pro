@@ -96,6 +96,13 @@ internal fun shouldIncludeEmbeddedAudio(
     clipHasAudio: List<Boolean>
 ): Boolean = settings.includeAudio && !trackMuted && clipHasAudio.isNotEmpty() && clipHasAudio.all { it }
 
+@OptIn(UnstableApi::class)
+internal fun hdrModeForExport(hasHdrInput: Boolean): Int = if (hasHdrInput) {
+    Composition.HDR_MODE_TONE_MAP_HDR_TO_SDR_USING_OPEN_GL
+} else {
+    Composition.HDR_MODE_KEEP_HDR
+}
+
 internal interface Media3CodecSupportProbe {
     fun hasVideoEncoder(settings: ExportSettings, requireHardware: Boolean): Boolean
     fun hasAudioEncoder(sampleRate: Int, channelCount: Int, bitrate: Int): Boolean
@@ -129,7 +136,8 @@ class Media3TransformerBackend internal constructor(
     private data class ExportPlan(
         val clips: List<ExportClipPlan>,
         val outputFrameCount: Long,
-        val includeAudio: Boolean
+        val includeAudio: Boolean,
+        val hasHdrInput: Boolean
     )
 
     private data class ActiveExport(
@@ -247,7 +255,9 @@ class Media3TransformerBackend internal constructor(
             }
             val composition = Composition.Builder(
                 EditedMediaItemSequence.Builder(editedItems).build()
-            ).build()
+            )
+                .setHdrMode(hdrModeForExport(plan.hasHdrInput))
+                .build()
 
             val videoBitrateMode = when (job.settings.bitrateMode) {
                 ExportSettings.BitrateMode.CBR -> android.media.MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR
@@ -604,8 +614,18 @@ class Media3TransformerBackend internal constructor(
             } else if (!asset.metadata.variableFrameRateDetectionComplete) {
                 errors += "Video timestamp cadence is unverified; reanalyze the source before export."
             }
-            if (asset.metadata.videoStreams.any { it.isHdr || it.isLog || (it.bitDepth ?: 8) > 8 }) {
-                errors += "HDR, log, and greater-than-8-bit sources are not supported by this SDR export path."
+            if (asset.metadata.videoStreams.any { it.isLog }) {
+                errors += "Log-encoded source video is not supported by this Rec.709 export path; convert the source to SDR first."
+            }
+            if (asset.metadata.videoStreams.any { it.isHdr } && Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+                errors += "HDR-to-SDR export requires Android 10 or newer on this Media3 path."
+            }
+            if (asset.metadata.videoStreams.any {
+                    (it.bitDepth ?: 8) > 8 && !it.isHdr &&
+                        it.colorTransfer != MediaFormat.COLOR_TRANSFER_SDR_VIDEO
+                }
+            ) {
+                errors += "A greater-than-8-bit source has no verified SDR transfer metadata; export is blocked to avoid incorrect color conversion."
             }
             if (clip.transform != ClipTransform.defaultTransform()) {
                 errors += "Clip transforms, crops, perspective changes, and transform keyframes are not supported by this path yet."
@@ -714,6 +734,12 @@ class Media3TransformerBackend internal constructor(
         if (activeAssets.any { it.metadata.exactFrameRate == null && it.metadata.estimatedFrameRate != null }) {
             warnings += "One or more source frame rates are estimated from import metadata; verify they are constant-frame-rate."
         }
+        if (activeAssets.any { asset -> asset.metadata.videoStreams.any { it.isHdr } }) {
+            warnings += "HDR source footage will be tone-mapped to Rec.709 SDR; the exported H.264 file will not preserve HDR."
+        }
+        if (activeAssets.any { asset -> asset.metadata.videoStreams.any { (it.bitDepth ?: 8) > 8 && !it.isHdr } }) {
+            warnings += "Greater-than-8-bit SDR input will be converted to 8-bit H.264 output."
+        }
         if (activeAssets.size > 1) {
             warnings += "Video clips are exported as a sequential, cut-only Media3 composition after timeline gaps are closed."
             warnings += "Crossfades and other NLE transitions are not implemented by this export path."
@@ -760,7 +786,10 @@ class Media3TransformerBackend internal constructor(
         return ExportPlan(
             clips = clipPlans,
             outputFrameCount = outputFrames,
-            includeAudio = includeAudio
+            includeAudio = includeAudio,
+            hasHdrInput = enabledClips.any { clip ->
+                project.mediaAssets.first { it.assetId == clip.mediaId }.metadata.videoStreams.any { it.isHdr }
+            }
         )
     }
 

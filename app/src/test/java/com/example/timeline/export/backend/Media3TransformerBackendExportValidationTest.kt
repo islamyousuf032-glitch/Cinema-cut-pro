@@ -1,6 +1,8 @@
 package com.example.timeline.export.backend
 
 import android.content.Context
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.transformer.Composition
 import androidx.test.core.app.ApplicationProvider
 import com.example.timeline.core.ClipType
 import com.example.timeline.core.ProjectFrameRatePreset
@@ -16,6 +18,8 @@ import com.example.timeline.media.FrameRate
 import com.example.timeline.media.MediaAsset
 import com.example.timeline.media.MediaAssetType
 import com.example.timeline.media.MediaMetadata
+import com.example.timeline.media.VideoStreamInfo
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -25,6 +29,7 @@ import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [33])
+@OptIn(UnstableApi::class)
 class Media3TransformerBackendExportValidationTest {
     private val applicationContext: Context = ApplicationProvider.getApplicationContext()
 
@@ -42,7 +47,8 @@ class Media3TransformerBackendExportValidationTest {
     private fun asset(
         id: String,
         audioSampleRate: Int? = null,
-        audioChannels: Int = 2
+        audioChannels: Int = 2,
+        videoStreams: List<VideoStreamInfo> = emptyList()
     ) = MediaAsset(
         assetId = id,
         projectId = "project",
@@ -63,7 +69,7 @@ class Media3TransformerBackendExportValidationTest {
             height = 1080,
             rotationDegrees = 0,
             pixelAspectRatio = 1f,
-            videoStreams = emptyList(),
+            videoStreams = videoStreams,
             audioStreams = audioSampleRate?.let { sampleRate ->
                 listOf(
                     AudioStreamInfo(
@@ -86,6 +92,34 @@ class Media3TransformerBackendExportValidationTest {
             creationTime = null,
             variableFrameRateDetectionComplete = true
         )
+    )
+
+    private fun videoStream(bitDepth: Int = 8, isHdr: Boolean = false, isLog: Boolean = false) = VideoStreamInfo(
+        codecName = "hevc",
+        codecMime = "video/hevc",
+        codecProfile = null,
+        codecLevel = null,
+        width = 3840,
+        height = 2160,
+        frameRate = FrameRate(30, 1),
+        bitDepth = bitDepth,
+        chromaSubsampling = "4:2:0",
+        colorStandard = null,
+        colorTransfer = when {
+            isHdr -> android.media.MediaFormat.COLOR_TRANSFER_HLG
+            bitDepth > 8 -> android.media.MediaFormat.COLOR_TRANSFER_SDR_VIDEO
+            else -> null
+        },
+        colorRange = null,
+        hdrStaticMetadata = null,
+        hdrDynamicMetadata = null,
+        isHdr = isHdr,
+        isLog = isLog,
+        detectedLogProfile = null,
+        hardwareDecodeSupported = true,
+        softwareDecodeSupported = false,
+        requiresProxy = false,
+        requiresTranscode = false
     )
 
     private fun clip(id: String, mediaId: String, start: Long) = TimelineClip(
@@ -142,6 +176,73 @@ class Media3TransformerBackendExportValidationTest {
         val result = backend.validate(settings(), project)
 
         assertTrue(result.unsupportedFeatures.joinToString("\n"), result.isValid)
+    }
+
+    @Test
+    fun hdrSourceIsValidatedForExplicitSdrToneMapping() {
+        val source = asset("hdr", videoStreams = listOf(videoStream(bitDepth = 10, isHdr = true)))
+        val project = project(listOf(source), listOf(clip("clip", source.assetId, 0L)))
+        val backend = Media3TransformerBackend(applicationContext, CodecProbe())
+
+        val result = backend.validate(settings(), project)
+
+        assertTrue(result.unsupportedFeatures.joinToString("\n"), result.isValid)
+        assertTrue(result.warnings.any { it.contains("tone-mapped to Rec.709 SDR") })
+        assertEquals(
+            Composition.HDR_MODE_TONE_MAP_HDR_TO_SDR_USING_OPEN_GL,
+            hdrModeForExport(hasHdrInput = true)
+        )
+        assertEquals(Composition.HDR_MODE_KEEP_HDR, hdrModeForExport(hasHdrInput = false))
+    }
+
+    @Test
+    fun tenBitSdrSourceCanBeConvertedToEightBitH264() {
+        val source = asset("ten-bit-sdr", videoStreams = listOf(videoStream(bitDepth = 10)))
+        val project = project(listOf(source), listOf(clip("clip", source.assetId, 0L)))
+        val backend = Media3TransformerBackend(applicationContext, CodecProbe())
+
+        val result = backend.validate(settings(), project)
+
+        assertTrue(result.unsupportedFeatures.joinToString("\n"), result.isValid)
+        assertTrue(result.warnings.any { it.contains("converted to 8-bit H.264") })
+    }
+
+    @Test
+    fun tenBitSourceWithUnknownTransferIsBlockedRatherThanAssumedSdr() {
+        val stream = videoStream(bitDepth = 10).copy(colorTransfer = null)
+        val source = asset("unknown-transfer", videoStreams = listOf(stream))
+        val project = project(listOf(source), listOf(clip("clip", source.assetId, 0L)))
+        val backend = Media3TransformerBackend(applicationContext, CodecProbe())
+
+        val result = backend.validate(settings(), project)
+
+        assertFalse(result.isValid)
+        assertTrue(result.unsupportedFeatures.any { it.contains("no verified SDR transfer metadata") })
+    }
+
+    @Test
+    fun logSourceRemainsBlockedInsteadOfBeingSilentlyTreatedAsRec709() {
+        val source = asset("log", videoStreams = listOf(videoStream(bitDepth = 10, isLog = true)))
+        val project = project(listOf(source), listOf(clip("clip", source.assetId, 0L)))
+        val backend = Media3TransformerBackend(applicationContext, CodecProbe())
+
+        val result = backend.validate(settings(), project)
+
+        assertFalse(result.isValid)
+        assertTrue(result.unsupportedFeatures.any { it.contains("Log-encoded") })
+    }
+
+    @Test
+    @Config(sdk = [28])
+    fun hdrSourceIsRejectedOnAndroidVersionsWithoutOpenGlToneMappingSupport() {
+        val source = asset("hdr", videoStreams = listOf(videoStream(bitDepth = 10, isHdr = true)))
+        val project = project(listOf(source), listOf(clip("clip", source.assetId, 0L)))
+        val backend = Media3TransformerBackend(applicationContext, CodecProbe())
+
+        val result = backend.validate(settings(), project)
+
+        assertFalse(result.isValid)
+        assertTrue(result.unsupportedFeatures.any { it.contains("HDR-to-SDR export requires Android 10") })
     }
 
     @Test
