@@ -184,7 +184,7 @@ class Media3FallbackPreviewEngine(context: Context) : PreviewEngine {
                 _playbackMetrics.update {
                     it.copy(
                         droppedVideoFrames = it.droppedVideoFrames + droppedFrames.coerceAtLeast(0),
-                        droppedFramesInLastReport = droppedFrames.coerceAtLeast(0),
+                        droppedFramesInLastReport = droppedFrames.coerceAtLeast(0).toLong(),
                         droppedFrameReportWindowMs = elapsedMs.coerceAtLeast(0L)
                     )
                 }
