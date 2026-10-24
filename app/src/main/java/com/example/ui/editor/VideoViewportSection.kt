@@ -12,6 +12,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.example.timeline.ui.TimelineUiState
 import com.example.timeline.engine.preview.TimelinePreviewController
+import com.example.timeline.engine.preview.shouldGenerateAdaptiveProxy
 import com.example.timeline.ui.TimelineViewModel
 import com.example.ui.editor.viewport.*
 import com.example.timeline.ui.viewport.CleanVideoCanvas
@@ -55,6 +56,8 @@ fun VideoViewportSection(
             ?.playbackMetrics
             ?: kotlinx.coroutines.flow.MutableStateFlow(com.example.timeline.engine.preview.PreviewPlaybackMetrics())
     }
+    val media3Metrics by media3MetricsFlow.collectAsState()
+    val automaticProxyRequests = remember(project.id) { mutableSetOf<String>() }
     val latestIsPlaying by rememberUpdatedState(isPlaying)
     
     var showSafeArea by remember { mutableStateOf(false) }
@@ -70,6 +73,39 @@ fun VideoViewportSection(
             project.mediaAssets
                 .filter { it.proxyStatus == com.example.timeline.media.ProxyStatus.RECOMMENDED }
                 .forEach { asset -> timelineViewModel.generateRecommendedProxy(asset.assetId) }
+        }
+    }
+
+    // Import metadata cannot predict every device decoder's real-time performance. If Media3
+    // reports repeated dropped frames while smooth playback is using the original, generate one
+    // proxy for this asset; the existing source resolver switches to it as soon as it is READY.
+    LaunchedEffect(
+        currentProjectAsset?.assetId,
+        currentProjectAsset?.proxyStatus,
+        currentProjectAsset?.proxyPlaybackFailure,
+        previewSettings.previewMode,
+        previewSettings.autoGenerateProxy,
+        isPlaying,
+        activeSourceIsProxy,
+        engineType,
+        colorGradingPreviewActive,
+        media3Metrics.droppedFramesInLastReport,
+        media3Metrics.droppedFrameReportWindowMs
+    ) {
+        val asset = currentProjectAsset ?: return@LaunchedEffect
+        if (!previewSettings.autoGenerateProxy || colorGradingPreviewActive) return@LaunchedEffect
+        val shouldGenerate = shouldGenerateAdaptiveProxy(
+            previewMode = previewSettings.previewMode,
+            engineType = engineType,
+            isPlaying = isPlaying,
+            isProxySource = activeSourceIsProxy,
+            proxyStatus = asset.proxyStatus,
+            proxyPlaybackFailure = asset.proxyPlaybackFailure,
+            metrics = media3Metrics
+        )
+        val requestKey = "${project.id}:${asset.assetId}"
+        if (shouldGenerate && automaticProxyRequests.add(requestKey)) {
+            timelineViewModel.generateProxy(asset.assetId)
         }
     }
 
@@ -302,7 +338,6 @@ fun VideoViewportSection(
         }
         
         if (com.example.BuildConfig.DEBUG && previewSettings.showDebugOverlay) {
-            val media3Metrics by media3MetricsFlow.collectAsState()
             DeveloperDebugPanel(
                 currentAsset = currentProjectAsset,
                 playheadFrame = playheadFrame,
