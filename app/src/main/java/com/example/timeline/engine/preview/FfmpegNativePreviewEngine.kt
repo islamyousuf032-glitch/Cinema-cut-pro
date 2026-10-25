@@ -15,6 +15,7 @@ import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import com.example.BuildConfig
 import com.example.model.adjustments.VideoAdjustmentParams
 import com.example.timeline.media.NativeFfmpegDecoder
+import com.example.timeline.media.NativeFfmpegHandleGate
 import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
