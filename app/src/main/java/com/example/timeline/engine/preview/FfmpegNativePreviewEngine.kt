@@ -74,8 +74,8 @@ class FfmpegNativePreviewEngine(context: Context) : PreviewEngine {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val nativeMutex = Mutex()
+    private val nativeHandleGate = NativeFfmpegHandleGate()
     private val loadGeneration = AtomicLong(0L)
-    @Volatile private var nativeHandle = 0L
     @Volatile private var released = false
     private var loadJob: Job? = null
     private var progressJob: Job? = null
@@ -95,6 +95,13 @@ class FfmpegNativePreviewEngine(context: Context) : PreviewEngine {
     private var playbackRequested = false
     private var latestUseProxy = false
     private var latestEvaluatedParams: VideoAdjustmentParams? = null
+
+    private data class NativePlaybackSnapshot(
+        val hasFirstFrame: Boolean,
+        val error: String,
+        val positionUs: Long,
+        val isPlaying: Boolean
+    )
 
     override var onTimeChanged: ((Long) -> Unit)? = null
     override var onPlaybackEnded: (() -> Unit)? = null
@@ -192,8 +199,11 @@ class FfmpegNativePreviewEngine(context: Context) : PreviewEngine {
     ) {
         if (released) {
             newSurface?.release()
-            if (textureToRelease != null && pendingTextureReleases.add(textureToRelease)) {
-                releaseTextureSafely(textureToRelease)
+            if (textureToRelease != null) {
+                pendingTextureReleases.add(textureToRelease)
+                CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+                    nativeMutex.withLock { releaseTextureSafely(textureToRelease) }
+                }
             }
             return
         }
@@ -248,10 +258,11 @@ class FfmpegNativePreviewEngine(context: Context) : PreviewEngine {
         latestUseProxy = useProxy
         latestEvaluatedParams = evaluatedParams
 
-        val handle = nativeHandle
+        val handle = nativeHandleGate.current()
         if (sameSource && handle != 0L) {
             val deltaUs = kotlin.math.abs(currentPositionUsValue - targetPositionUs)
-            val seekThresholdUs = if (NativeFfmpegDecoder.isPlaying(handle)) 300_000L else 80_000L
+            val nativeIsPlaying = nativeHandleGate.read(handle, NativeFfmpegDecoder::isPlaying) ?: false
+            val seekThresholdUs = if (nativeIsPlaying) 300_000L else 80_000L
             if (forceSeek || deltaUs > seekThresholdUs) seekTo(targetPositionUs)
             return
         }
@@ -278,8 +289,7 @@ class FfmpegNativePreviewEngine(context: Context) : PreviewEngine {
         requestedUri = uri
         requestedPositionUs = positionUs.coerceAtLeast(0L)
         playbackRequested = resumePlayback
-        val handleToClose = nativeHandle
-        nativeHandle = 0L
+        val handleToClose = nativeHandleGate.take()
         _currentState.value = PreviewState.LOADING
         _currentError.value = null
         _currentPlaybackFailure.value = null
@@ -288,11 +298,12 @@ class FfmpegNativePreviewEngine(context: Context) : PreviewEngine {
         audioPlayer.pause()
 
         loadJob = scope.launch {
+            var openedHandleAwaitingInstall = 0L
             try {
                 withContext(NonCancellable) {
                     nativeMutex.withLock {
                         withContext(Dispatchers.IO) {
-                            NativeFfmpegDecoder.close(handleToClose)
+                            nativeHandleGate.closeDetached(handleToClose, NativeFfmpegDecoder::close)
                             previousSurfaceToRelease?.release()
                             releaseTextureSafely(textureToRelease)
                         }
@@ -305,19 +316,31 @@ class FfmpegNativePreviewEngine(context: Context) : PreviewEngine {
                         val newHandle = withContext(Dispatchers.IO) {
                             NativeFfmpegDecoder.open(appContext, Uri.parse(uri), surface)
                         }
-                        if (released || generation != loadGeneration.get()) {
-                            withContext(Dispatchers.IO) { NativeFfmpegDecoder.close(newHandle) }
+                        openedHandleAwaitingInstall = newHandle
+                        val installed = nativeHandleGate.installIf(
+                            handle = newHandle,
+                            canInstall = { !released && generation == loadGeneration.get() }
+                        ) { handle ->
+                            durationUsValue = NativeFfmpegDecoder.durationUs(handle).coerceAtLeast(0L)
+                            currentPositionUsValue = positionUs.coerceIn(
+                                0L,
+                                durationUsValue.takeIf { it > 0L } ?: Long.MAX_VALUE
+                            )
+                            NativeFfmpegDecoder.setPlaybackSpeed(handle, playbackSpeed)
+                            NativeFfmpegDecoder.seek(handle, currentPositionUsValue)
+                            if (resumePlayback) NativeFfmpegDecoder.play(handle)
+                        }
+                        if (!installed) {
+                            openedHandleAwaitingInstall = 0L
+                            withContext(Dispatchers.IO) {
+                                nativeHandleGate.closeDetached(newHandle, NativeFfmpegDecoder::close)
+                            }
                             return@withLock
                         }
+                        openedHandleAwaitingInstall = 0L
 
-                        nativeHandle = newHandle
-                        durationUsValue = NativeFfmpegDecoder.durationUs(newHandle).coerceAtLeast(0L)
-                        currentPositionUsValue = positionUs.coerceIn(0L, durationUsValue.takeIf { it > 0L } ?: Long.MAX_VALUE)
-                        NativeFfmpegDecoder.setPlaybackSpeed(newHandle, playbackSpeed)
-                        NativeFfmpegDecoder.seek(newHandle, currentPositionUsValue)
                         configureAudio(uri, currentPositionUsValue, resumePlayback)
                         if (resumePlayback) {
-                            NativeFfmpegDecoder.play(newHandle)
                             audioPlayer.play()
                             _currentState.value = PreviewState.PLAYING
                         } else {
@@ -329,9 +352,27 @@ class FfmpegNativePreviewEngine(context: Context) : PreviewEngine {
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: LinkageError) {
+                val failedHandle = nativeHandleGate.take()
+                val orphanedHandle = openedHandleAwaitingInstall
+                openedHandleAwaitingInstall = 0L
+                withContext(Dispatchers.IO) {
+                    nativeHandleGate.closeDetached(failedHandle, NativeFfmpegDecoder::close)
+                    if (orphanedHandle != 0L && orphanedHandle != failedHandle) {
+                        nativeHandleGate.closeDetached(orphanedHandle, NativeFfmpegDecoder::close)
+                    }
+                }
                 if (released || generation != loadGeneration.get()) return@launch
                 reportFailure(uri, "FFmpeg native decoder could not initialize on this device", error)
             } catch (error: Exception) {
+                val failedHandle = nativeHandleGate.take()
+                val orphanedHandle = openedHandleAwaitingInstall
+                openedHandleAwaitingInstall = 0L
+                withContext(Dispatchers.IO) {
+                    nativeHandleGate.closeDetached(failedHandle, NativeFfmpegDecoder::close)
+                    if (orphanedHandle != 0L && orphanedHandle != failedHandle) {
+                        nativeHandleGate.closeDetached(orphanedHandle, NativeFfmpegDecoder::close)
+                    }
+                }
                 if (released || generation != loadGeneration.get()) return@launch
                 reportFailure(uri, error.message ?: "FFmpeg could not open this video", error)
             }
@@ -352,27 +393,29 @@ class FfmpegNativePreviewEngine(context: Context) : PreviewEngine {
         progressJob = scope.launch {
             try {
                 while (!released && generation == loadGeneration.get()) {
-                    val handle = nativeHandle
-                    if (handle != 0L) {
-                        val frameAvailable = NativeFfmpegDecoder.hasFirstFrame(handle)
-                        val error = NativeFfmpegDecoder.lastError(handle)
-                        if (frameAvailable && !_firstFrameRendered.value) {
+                    val handle = nativeHandleGate.current()
+                    val snapshot = nativeHandleGate.read(handle) { activeHandle ->
+                        NativePlaybackSnapshot(
+                            hasFirstFrame = NativeFfmpegDecoder.hasFirstFrame(activeHandle),
+                            error = NativeFfmpegDecoder.lastError(activeHandle),
+                            positionUs = NativeFfmpegDecoder.positionUs(activeHandle),
+                            isPlaying = NativeFfmpegDecoder.isPlaying(activeHandle)
+                        )
+                    }
+                    if (snapshot != null) {
+                        if (snapshot.hasFirstFrame && !_firstFrameRendered.value) {
                             _firstFrameRendered.value = true
-                            _currentState.value = if (NativeFfmpegDecoder.isPlaying(handle)) {
-                                PreviewState.PLAYING
-                            } else {
-                                PreviewState.READY
-                            }
+                            _currentState.value = if (snapshot.isPlaying) PreviewState.PLAYING else PreviewState.READY
                         }
-                        if (error.isNotBlank()) {
-                            reportFailure(requestedUri.orEmpty(), error, null)
+                        if (snapshot.error.isNotBlank()) {
+                            reportFailure(requestedUri.orEmpty(), snapshot.error, null)
                             return@launch
                         }
 
-                        val position = NativeFfmpegDecoder.positionUs(handle).coerceAtLeast(0L)
+                        val position = snapshot.positionUs.coerceAtLeast(0L)
                         currentPositionUsValue = position
                         if (_firstFrameRendered.value) onTimeChanged?.invoke(position)
-                        if (!NativeFfmpegDecoder.isPlaying(handle) && playbackRequested) {
+                        if (!snapshot.isPlaying && playbackRequested) {
                             if (durationUsValue > 0L && position >= durationUsValue - 50_000L) {
                                 playbackRequested = false
                                 audioPlayer.pause()
@@ -433,15 +476,14 @@ class FfmpegNativePreviewEngine(context: Context) : PreviewEngine {
 
     private fun scheduleNativeClose(surface: Surface?, texture: SurfaceTexture?) {
         loadGeneration.incrementAndGet()
-        val handle = nativeHandle
-        nativeHandle = 0L
+        val handle = nativeHandleGate.take()
         progressJob?.cancel()
         audioPlayer.pause()
         _currentState.value = PreviewState.IDLE
         texture?.let(pendingTextureReleases::add)
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             nativeMutex.withLock {
-                NativeFfmpegDecoder.close(handle)
+                nativeHandleGate.closeDetached(handle, NativeFfmpegDecoder::close)
                 surface?.release()
                 releaseTextureSafely(texture)
             }
@@ -451,18 +493,21 @@ class FfmpegNativePreviewEngine(context: Context) : PreviewEngine {
     override fun play() {
         if (released) return
         playbackRequested = true
-        val handle = nativeHandle
+        val handle = nativeHandleGate.current()
         if (handle == 0L) {
             requestedUri?.let { uri -> beginLoad(uri, requestedPositionUs, resumePlayback = true) }
             return
         }
-        if (durationUsValue > 0L && currentPositionUsValue >= durationUsValue - 50_000L) {
-            NativeFfmpegDecoder.seek(handle, 0L)
-            audioPlayer.seekTo(0L)
-            currentPositionUsValue = 0L
+        val started = nativeHandleGate.invoke(handle) { activeHandle ->
+            if (durationUsValue > 0L && currentPositionUsValue >= durationUsValue - 50_000L) {
+                NativeFfmpegDecoder.seek(activeHandle, 0L)
+                audioPlayer.seekTo(0L)
+                currentPositionUsValue = 0L
+            }
+            NativeFfmpegDecoder.setPlaybackSpeed(activeHandle, playbackSpeed)
+            NativeFfmpegDecoder.play(activeHandle)
         }
-        NativeFfmpegDecoder.setPlaybackSpeed(handle, playbackSpeed)
-        NativeFfmpegDecoder.play(handle)
+        if (!started) return
         audioPlayer.play()
         _currentState.value = PreviewState.PLAYING
         startProgressTracker(loadGeneration.get())
@@ -470,8 +515,8 @@ class FfmpegNativePreviewEngine(context: Context) : PreviewEngine {
 
     override fun pause() {
         playbackRequested = false
-        val handle = nativeHandle
-        if (handle != 0L) NativeFfmpegDecoder.pause(handle)
+        val handle = nativeHandleGate.current()
+        nativeHandleGate.invoke(handle, NativeFfmpegDecoder::pause)
         audioPlayer.pause()
         if (_firstFrameRendered.value && _currentState.value != PreviewState.ERROR) {
             _currentState.value = PreviewState.READY
@@ -482,17 +527,16 @@ class FfmpegNativePreviewEngine(context: Context) : PreviewEngine {
         val targetUs = timeUs.coerceAtLeast(0L)
         requestedPositionUs = targetUs
         currentPositionUsValue = targetUs
-        val handle = nativeHandle
-        if (handle == 0L) return
-        NativeFfmpegDecoder.seek(handle, targetUs)
+        val handle = nativeHandleGate.current()
+        if (!nativeHandleGate.invoke(handle) { NativeFfmpegDecoder.seek(it, targetUs) }) return
         audioPlayer.seekTo(targetUs / 1_000L)
         _currentState.value = if (_firstFrameRendered.value) PreviewState.READY else PreviewState.LOADING
     }
 
     override fun setPlaybackSpeed(speed: Float) {
         playbackSpeed = if (speed.isFinite()) speed.coerceIn(0.1f, 4f) else 1f
-        val handle = nativeHandle
-        if (handle != 0L) NativeFfmpegDecoder.setPlaybackSpeed(handle, playbackSpeed)
+        val handle = nativeHandleGate.current()
+        nativeHandleGate.invoke(handle) { NativeFfmpegDecoder.setPlaybackSpeed(it, playbackSpeed) }
         audioPlayer.setPlaybackSpeed(playbackSpeed)
     }
 
@@ -512,8 +556,7 @@ class FfmpegNativePreviewEngine(context: Context) : PreviewEngine {
         onPlaybackEnded = null
         audioPlayer.pause()
         audioPlayer.release()
-        val handle = nativeHandle
-        nativeHandle = 0L
+        val handle = nativeHandleGate.take()
         val surface = outputSurface
         outputSurface = null
         val texture = ownedSurfaceTexture
@@ -527,7 +570,7 @@ class FfmpegNativePreviewEngine(context: Context) : PreviewEngine {
         texture?.let(pendingTextureReleases::add)
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             nativeMutex.withLock {
-                NativeFfmpegDecoder.close(handle)
+                nativeHandleGate.closeDetached(handle, NativeFfmpegDecoder::close)
                 surface?.release()
                 releaseTextureSafely(texture)
             }

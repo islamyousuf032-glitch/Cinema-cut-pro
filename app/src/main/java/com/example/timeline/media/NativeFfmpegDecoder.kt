@@ -7,6 +7,56 @@ import android.view.Surface
 import java.io.File
 import java.io.IOException
 
+/** Serializes JNI calls with handle retirement so nativeClose cannot free a live pointer. */
+internal class NativeFfmpegHandleGate {
+    private val monitor = Any()
+
+    @Volatile
+    private var activeHandle: Long = 0L
+
+    fun current(): Long = activeHandle
+
+    fun take(): Long = synchronized(monitor) {
+        activeHandle.also { activeHandle = 0L }
+    }
+
+    /** Publishes a newly opened handle and initializes it while close/use calls are excluded. */
+    fun installIf(handle: Long, canInstall: () -> Boolean, initialize: (Long) -> Unit): Boolean =
+        synchronized(monitor) {
+            if (handle == 0L || activeHandle != 0L || !canInstall()) return@synchronized false
+            activeHandle = handle
+            try {
+                initialize(handle)
+                true
+            } catch (error: Throwable) {
+                activeHandle = 0L
+                throw error
+            }
+        }
+
+    fun invoke(handle: Long, action: (Long) -> Unit): Boolean = synchronized(monitor) {
+        if (handle == 0L || activeHandle != handle) {
+            false
+        } else {
+            action(handle)
+            true
+        }
+    }
+
+    fun <T : Any> read(handle: Long, action: (Long) -> T): T? = synchronized(monitor) {
+        if (handle == 0L || activeHandle != handle) null else action(handle)
+    }
+
+    /** Closes a detached pointer under the same gate used by every live-handle JNI operation. */
+    fun closeDetached(handle: Long, close: (Long) -> Unit) {
+        if (handle == 0L) return
+        synchronized(monitor) {
+            if (activeHandle == handle) activeHandle = 0L
+            close(handle)
+        }
+    }
+}
+
 /** JNI surface for FFmpeg demuxing and native MediaCodec/software video decoding. */
 internal object NativeFfmpegDecoder {
     private val libraryFailure: String? = try {

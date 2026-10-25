@@ -298,11 +298,31 @@ class TimelinePreviewController(private val context: Context) {
                     releasePendingEngine(oldEngine)
                 }
             }
-        } catch (e: Exception) {
-            candidateEngine?.release()
-            if (com.example.BuildConfig.DEBUG) {
-                android.util.Log.e("TimelinePreviewController", "Failed to switch engine to $type", e)
-            }
+        } catch (error: LinkageError) {
+            recoverFailedEngineSwitch(type, oldEngine, candidateEngine, error)
+        } catch (error: Exception) {
+            recoverFailedEngineSwitch(type, oldEngine, candidateEngine, error)
+        }
+    }
+
+    private fun recoverFailedEngineSwitch(
+        requestedType: PreviewEngineType,
+        oldEngine: PreviewEngine,
+        candidateEngine: PreviewEngine?,
+        error: Throwable
+    ) {
+        runCatching { candidateEngine?.release() }
+        if (com.example.BuildConfig.DEBUG) {
+            android.util.Log.e("TimelinePreviewController", "Failed to switch engine to $requestedType", error)
+        }
+
+        // Native/library initialization errors should not escape the UI thread or strand playback.
+        // Preserve the old engine when possible; otherwise retry with the platform decoder.
+        if (
+            previewEngine === oldEngine &&
+            (requestedType == PreviewEngineType.FFMPEG_NATIVE || requestedType == PreviewEngineType.VLC_NATIVE)
+        ) {
+            switchEngineType(PreviewEngineType.MEDIA3_FALLBACK)
         }
     }
 
