@@ -160,8 +160,25 @@ cd "${BUILD_DIR}"
   --disable-autodetect \
   --enable-jni \
   --enable-mediacodec \
+  --enable-decoder=h264 \
+  --enable-decoder=hevc \
+  --enable-decoder=av1 \
+  --enable-decoder=vp8 \
+  --enable-decoder=vp9 \
+  --enable-decoder=prores \
+  --enable-decoder=prores_raw \
+  --enable-decoder=apv \
   --enable-decoder=h264_mediacodec \
-  --enable-decoder=hevc_mediacodec
+  --enable-decoder=hevc_mediacodec \
+  --enable-decoder=av1_mediacodec \
+  --enable-decoder=vp8_mediacodec \
+  --enable-decoder=vp9_mediacodec \
+  --enable-decoder=mpeg2_mediacodec \
+  --enable-decoder=mpeg4_mediacodec \
+  --enable-parser=apv \
+  --enable-demuxer=apv \
+  --enable-demuxer=mov \
+  --enable-demuxer=matroska
 
 for component in JNI MEDIACODEC; do
   if ! grep -Eq "^#define CONFIG_${component} 1$" config.h; then
@@ -170,9 +187,21 @@ for component in JNI MEDIACODEC; do
   fi
 done
 
-for component in H264_MEDIACODEC_DECODER HEVC_MEDIACODEC_DECODER; do
+for component in \
+  H264_DECODER HEVC_DECODER AV1_DECODER VP8_DECODER VP9_DECODER \
+  PRORES_DECODER PRORES_RAW_DECODER APV_DECODER \
+  H264_MEDIACODEC_DECODER HEVC_MEDIACODEC_DECODER AV1_MEDIACODEC_DECODER \
+  VP8_MEDIACODEC_DECODER VP9_MEDIACODEC_DECODER \
+  MPEG2_MEDIACODEC_DECODER MPEG4_MEDIACODEC_DECODER; do
   if ! grep -Eq "^#define CONFIG_${component} 1$" config_components.h; then
     echo "Expected FFmpeg Android decoder was not enabled: ${component}." >&2
+    exit 2
+  fi
+done
+
+for component in APV_PARSER APV_DEMUXER MOV_DEMUXER MATROSKA_DEMUXER; do
+  if ! grep -Eq "^#define CONFIG_${component} 1$" config_components.h; then
+    echo "Expected FFmpeg media component was not enabled: ${component}." >&2
     exit 2
   fi
 done
@@ -203,7 +232,9 @@ Android ABI: arm64-v8a
 Android API: ${API_LEVEL}
 NDK version expected: ${NDK_VERSION}
 License configuration: default LGPL-only (GPL, version 3, and nonfree options not enabled)
-MediaCodec: enabled
+MediaCodec: enabled; H.264, HEVC, AV1, VP8, VP9, MPEG-2, and MPEG-4 hardware wrappers compiled when configured
+Software decoders: H.264, HEVC, AV1, VP8, VP9, ProRes, ProRes RAW, and APV
+Demuxers: MOV/MP4, Matroska/MKV, and APV elementary streams
 Libraries: shared, position-independent
 EOF
 

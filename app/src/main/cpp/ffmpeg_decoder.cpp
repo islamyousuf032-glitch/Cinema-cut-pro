@@ -220,9 +220,20 @@ AVCodecContext* openVideoDecoder(FfmpegPreview& preview, const AVCodec* decoder,
 bool initializeDecoder(FfmpegPreview& preview, jobject surface) {
     const AVCodecID codecId = preview.videoStream->codecpar->codec_id;
     const char* hardwareDecoderName = nullptr;
-    if (codecId == AV_CODEC_ID_H264) hardwareDecoderName = "h264_mediacodec";
-    else if (codecId == AV_CODEC_ID_HEVC) hardwareDecoderName = "hevc_mediacodec";
+    switch (codecId) {
+        case AV_CODEC_ID_H264: hardwareDecoderName = "h264_mediacodec"; break;
+        case AV_CODEC_ID_HEVC: hardwareDecoderName = "hevc_mediacodec"; break;
+        case AV_CODEC_ID_AV1: hardwareDecoderName = "av1_mediacodec"; break;
+        case AV_CODEC_ID_VP8: hardwareDecoderName = "vp8_mediacodec"; break;
+        case AV_CODEC_ID_VP9: hardwareDecoderName = "vp9_mediacodec"; break;
+        case AV_CODEC_ID_MPEG2VIDEO: hardwareDecoderName = "mpeg2_mediacodec"; break;
+        case AV_CODEC_ID_MPEG4: hardwareDecoderName = "mpeg4_mediacodec"; break;
+        default: break;
+    }
 
+    // FFmpeg's Android MediaCodec wrappers still defer actual profile, bit-depth, and device
+    // support decisions to the platform codec. A failed open falls through to the bundled
+    // software decoder; that path is also used for ProRes and APV.
     if (hardwareDecoderName != nullptr && surface != nullptr) {
         const AVCodec* hardwareDecoder = avcodec_find_decoder_by_name(hardwareDecoderName);
         if (hardwareDecoder != nullptr) {
@@ -294,6 +305,7 @@ int64_t monotonicTimeNs() {
 enum class FrameRenderOutcome {
     Rendered,
     Skipped,
+    HardwareDecoderFailed,
     Failed,
 };
 
@@ -337,7 +349,7 @@ FrameRenderOutcome waitForFrameTime(FfmpegPreview& preview, const int64_t frameU
         targetWallNs = std::clamp<int64_t>(targetWallNs, nowNs - 500'000'000LL, nowNs + 500'000'000LL);
         auto* buffer = reinterpret_cast<AVMediaCodecBuffer*>(preview.frame->data[3]);
         if (buffer == nullptr || av_mediacodec_render_buffer_at_time(buffer, targetWallNs) < 0) {
-            return FrameRenderOutcome::Failed;
+            return FrameRenderOutcome::HardwareDecoderFailed;
         }
         return FrameRenderOutcome::Rendered;
     }
@@ -419,6 +431,7 @@ enum class DecodeOutcome {
     Rendered,
     Skipped,
     EndOfStream,
+    HardwareDecoderFailed,
     Failed,
 };
 
@@ -440,6 +453,11 @@ DecodeOutcome decodeAndRenderNextFrame(FfmpegPreview& preview, std::string* erro
                 *error = "FFmpeg could not render the decoded video frame to the preview surface";
                 return DecodeOutcome::Failed;
             }
+            if (renderOutcome == FrameRenderOutcome::HardwareDecoderFailed) {
+                av_frame_unref(preview.frame);
+                *error = "Android MediaCodec could not render a decoded frame";
+                return DecodeOutcome::HardwareDecoderFailed;
+            }
             if (renderOutcome == FrameRenderOutcome::Skipped) {
                 av_frame_unref(preview.frame);
                 return DecodeOutcome::Skipped;
@@ -458,6 +476,10 @@ DecodeOutcome decodeAndRenderNextFrame(FfmpegPreview& preview, std::string* erro
         if (receiveResult == AVERROR_EOF) return DecodeOutcome::EndOfStream;
         if (receiveResult != AVERROR(EAGAIN)) {
             *error = "FFmpeg video decoder failed: " + ffmpegError(receiveResult);
+            if (preview.useMediaCodec) {
+                av_frame_unref(preview.frame);
+                return DecodeOutcome::HardwareDecoderFailed;
+            }
             return DecodeOutcome::Failed;
         }
         if (preview.packetPending) {
@@ -470,7 +492,9 @@ DecodeOutcome decodeAndRenderNextFrame(FfmpegPreview& preview, std::string* erro
             preview.packetPending = false;
             if (sendResult < 0) {
                 *error = "FFmpeg could not submit a video packet: " + ffmpegError(sendResult);
-                return DecodeOutcome::Failed;
+                return preview.useMediaCodec
+                    ? DecodeOutcome::HardwareDecoderFailed
+                    : DecodeOutcome::Failed;
             }
             continue;
         }
@@ -500,12 +524,48 @@ DecodeOutcome decodeAndRenderNextFrame(FfmpegPreview& preview, std::string* erro
             av_packet_unref(preview.packet);
             if (sendResult < 0) {
                 *error = "FFmpeg could not submit a video packet: " + ffmpegError(sendResult);
-                return DecodeOutcome::Failed;
+                return preview.useMediaCodec
+                    ? DecodeOutcome::HardwareDecoderFailed
+                    : DecodeOutcome::Failed;
             }
         } else {
             av_packet_unref(preview.packet);
         }
     }
+}
+
+bool switchToSoftwareDecoder(FfmpegPreview& preview, std::string* error) {
+    const AVCodecID codecId = preview.videoStream->codecpar->codec_id;
+    const AVCodec* softwareDecoder = avcodec_find_decoder(codecId);
+    if (softwareDecoder == nullptr) {
+        *error = "Android MediaCodec failed and this FFmpeg build has no software decoder for the codec";
+        return false;
+    }
+
+    int64_t resumePositionUs = 0;
+    {
+        std::lock_guard<std::mutex> guard(preview.mutex);
+        resumePositionUs = preview.positionUs;
+    }
+
+    if (preview.videoCodec != nullptr) {
+        if (preview.useMediaCodec) {
+            av_mediacodec_default_free(preview.videoCodec);
+            preview.mediaCodecContext = nullptr;
+        }
+        avcodec_free_context(&preview.videoCodec);
+    }
+    preview.useMediaCodec = false;
+    preview.videoCodec = openVideoDecoder(preview, softwareDecoder, nullptr, false);
+    if (preview.videoCodec == nullptr) {
+        *error = "Android MediaCodec failed and FFmpeg could not initialize its software decoder";
+        return false;
+    }
+    if (!seekTo(preview, resumePositionUs)) {
+        *error = "Android MediaCodec failed and FFmpeg could not resume in software at the current position";
+        return false;
+    }
+    return true;
 }
 
 void playbackLoop(FfmpegPreview* preview) {
@@ -537,6 +597,12 @@ void playbackLoop(FfmpegPreview* preview) {
 
         std::string error;
         const DecodeOutcome outcome = decodeAndRenderNextFrame(*preview, &error);
+        if (outcome == DecodeOutcome::HardwareDecoderFailed) {
+            std::string fallbackError;
+            if (switchToSoftwareDecoder(*preview, &fallbackError)) continue;
+            setError(*preview, fallbackError.empty() ? error : fallbackError);
+            continue;
+        }
         if (outcome == DecodeOutcome::Failed) {
             setError(*preview, error);
             continue;
