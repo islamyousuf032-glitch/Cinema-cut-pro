@@ -21,12 +21,13 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.Alignment
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import kotlinx.coroutines.flow.StateFlow
 
 
 @Composable
 fun AdvancedTimelineCanvas(
     uiState: TimelineUiState,
-    playheadFrame: Long,
+    playheadFrameFlow: StateFlow<Long>,
     isPlaying: Boolean,
     activeTool: TimelineTool,
     snapEnabled: Boolean,
@@ -100,12 +101,18 @@ fun AdvancedTimelineCanvas(
         }
         
         val isFollowing by FollowPlayheadController.isFollowing.collectAsState()
-        // Auto-center playhead if needed (only horizontal)
-        LaunchedEffect(playheadFrame) {
-            if (!isDragging && !transformableState.isTransformInProgress && isPlaying && isFollowing) {
-                 scrollX = max(0f, NativeAdvancedTimelineCore.frameToX(playheadFrame, pixelsPerFrame) - centerX)
-            }
-        }
+        FollowPlayheadScrollEffect(
+            playheadFrameFlow = playheadFrameFlow,
+            pixelsPerFrame = pixelsPerFrame,
+            centerX = centerX,
+            currentScrollX = scrollX,
+            isPlaying = isPlaying,
+            isFollowing = isFollowing,
+            isDragging = isDragging,
+            transformableState = transformableState,
+            frameToX = NativeAdvancedTimelineCore::frameToX,
+            onScrollTo = { scrollX = it }
+        )
         
         Row(modifier = Modifier.fillMaxSize()) {
             // Track Headers
@@ -211,19 +218,19 @@ fun AdvancedTimelineCanvas(
                                         val currentX = change.position.x + scrollX
                                         val frame = NativeAdvancedTimelineCore.xToFrame(currentX, pixelsPerFrame)
                                         val rawStart = max(0L, frame - action.startOffsetFrames)
-                                        dragGhostStartFrame = if (snapEnabled) AdvancedTimelineGestureController.snapFrame(rawStart, uiState.project, playheadFrame, pixelsPerFrame, action.clip.id) else rawStart
+                                        dragGhostStartFrame = if (snapEnabled) AdvancedTimelineGestureController.snapFrame(rawStart, uiState.project, playheadFrameFlow.value, pixelsPerFrame, action.clip.id) else rawStart
                                     }
                                     is TimelineDragAction.TrimStart -> {
                                         val currentX = change.position.x + scrollX
                                         val frame = NativeAdvancedTimelineCore.xToFrame(currentX, pixelsPerFrame)
-                                        val snapped = if (snapEnabled) AdvancedTimelineGestureController.snapFrame(max(0L, frame), uiState.project, playheadFrame, pixelsPerFrame, action.clip.id) else max(0L, frame)
+                                        val snapped = if (snapEnabled) AdvancedTimelineGestureController.snapFrame(max(0L, frame), uiState.project, playheadFrameFlow.value, pixelsPerFrame, action.clip.id) else max(0L, frame)
                                         // prevent trimming past end
                                         dragGhostStartFrame = minOf(snapped, action.clip.timelineEnd - 1)
                                     }
                                     is TimelineDragAction.TrimEnd -> {
                                         val currentX = change.position.x + scrollX
                                         val frame = NativeAdvancedTimelineCore.xToFrame(currentX, pixelsPerFrame)
-                                        val snapped = if (snapEnabled) AdvancedTimelineGestureController.snapFrame(max(0L, frame), uiState.project, playheadFrame, pixelsPerFrame, action.clip.id) else max(0L, frame)
+                                        val snapped = if (snapEnabled) AdvancedTimelineGestureController.snapFrame(max(0L, frame), uiState.project, playheadFrameFlow.value, pixelsPerFrame, action.clip.id) else max(0L, frame)
                                         // prevent trimming past start
                                         dragGhostEndFrame = maxOf(snapped, action.clip.timelineStart + 1)
                                     }
@@ -411,12 +418,11 @@ fun AdvancedTimelineCanvas(
                     AdvancedTimelineRuler(scrollX, viewportWidth, pixelsPerFrame, uiState.project.settings.getFpsRational())
                 }
                 
-                // Playhead (also fixed Y relative to scrolling)
-                val playheadX = with(androidx.compose.ui.platform.LocalDensity.current) {
-                    (NativeAdvancedTimelineCore.frameToX(playheadFrame, pixelsPerFrame) - scrollX).toDp()
-                }
-                TimelinePlayheadView(
-                    modifier = Modifier.offset(x = playheadX, y = 40.dp)
+                TimelinePlayheadIndicator(
+                    playheadFrameFlow = playheadFrameFlow,
+                    pixelsPerFrame = pixelsPerFrame,
+                    scrollX = scrollX,
+                    frameToX = NativeAdvancedTimelineCore::frameToX
                 )
             }
         }

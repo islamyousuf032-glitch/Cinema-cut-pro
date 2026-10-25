@@ -115,9 +115,11 @@ fun VideoViewportSection(
         )
     }
 
-    LaunchedEffect(playheadFrame) {
+    LaunchedEffect(isPlaying, project, timelinePreviewController, editorViewModel) {
         if (!isPlaying) {
-            timelinePreviewController.seekToTimelineFrame(project, playheadFrame)
+            editorViewModel.playheadFrame.collect { frame ->
+                timelinePreviewController.seekToTimelineFrame(project, frame)
+            }
         }
     }
 

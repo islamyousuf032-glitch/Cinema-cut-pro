@@ -11,6 +11,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import kotlinx.coroutines.flow.StateFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -27,7 +30,7 @@ fun AdvancedTimelineMiniViewport(
     timelineViewModel: TimelineViewModel,
     editorViewModel: EditorViewModel,
     timelinePreviewController: TimelinePreviewController,
-    playheadFrame: Long,
+    playheadFrameFlow: StateFlow<Long>,
     isPlaying: Boolean,
     onRelinkRequest: (String) -> Unit,
     onClose: () -> Unit
@@ -38,15 +41,13 @@ fun AdvancedTimelineMiniViewport(
             .clip(RoundedCornerShape(8.dp))
             .background(Color.Black)
     ) {
-        VideoViewportSection(
+        MiniViewportVideo(
             timelineUiState = timelineUiState,
             timelineViewModel = timelineViewModel,
             editorViewModel = editorViewModel,
             timelinePreviewController = timelinePreviewController,
-            playheadFrame = playheadFrame,
+            playheadFrameFlow = playheadFrameFlow,
             isPlaying = isPlaying,
-            isSampling = false,
-            onColorSampled = { _,_,_ -> },
             onRelinkRequest = onRelinkRequest,
             modifier = Modifier.fillMaxSize()
         )
@@ -80,11 +81,7 @@ fun AdvancedTimelineMiniViewport(
                 .background(Color.Black.copy(alpha = 0.5f), RoundedCornerShape(4.dp))
                 .padding(horizontal = 4.dp, vertical = 2.dp)
         ) {
-            Text(
-                text = "Frame: $playheadFrame",
-                color = Color.White,
-                fontSize = 10.sp
-            )
+            MiniViewportFrameLabel(playheadFrameFlow)
         }
 
         IconButton(
@@ -97,4 +94,40 @@ fun AdvancedTimelineMiniViewport(
             Icon(Icons.Default.Close, "Close", tint = Color.White)
         }
     }
+}
+
+@Composable
+private fun MiniViewportVideo(
+    timelineUiState: TimelineUiState,
+    timelineViewModel: TimelineViewModel,
+    editorViewModel: EditorViewModel,
+    timelinePreviewController: TimelinePreviewController,
+    playheadFrameFlow: StateFlow<Long>,
+    isPlaying: Boolean,
+    onRelinkRequest: (String) -> Unit,
+    modifier: Modifier
+) {
+    val playheadFrame by playheadFrameFlow.collectAsState()
+    VideoViewportSection(
+        timelineUiState = timelineUiState,
+        timelineViewModel = timelineViewModel,
+        editorViewModel = editorViewModel,
+        timelinePreviewController = timelinePreviewController,
+        playheadFrame = playheadFrame,
+        isPlaying = isPlaying,
+        isSampling = false,
+        onColorSampled = { _, _, _ -> },
+        onRelinkRequest = onRelinkRequest,
+        modifier = modifier
+    )
+}
+
+@Composable
+private fun MiniViewportFrameLabel(playheadFrameFlow: StateFlow<Long>) {
+    val playheadFrame by playheadFrameFlow.collectAsState()
+    Text(
+        text = "Frame: $playheadFrame",
+        color = Color.White,
+        fontSize = 10.sp
+    )
 }

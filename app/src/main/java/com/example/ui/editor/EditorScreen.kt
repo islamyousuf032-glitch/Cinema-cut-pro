@@ -40,33 +40,29 @@ fun EditorScreen(
 ) {
     val timelineUiState by timelineViewModel.uiState.collectAsState()
     val isPlaying by timelineViewModel.isPlaying.collectAsState()
-    val playheadFrame by editorViewModel.playheadFrame.collectAsState()
+    val activeAsset by timelinePreviewController.activeAsset.collectAsState()
     val isSampling by colorAdjustmentViewModel.isEyedropperActive.collectAsState()
     val scopeData by scopeViewModel.scopeData.collectAsState()
     val isAnalyzingScopes by scopeViewModel.isAnalyzing.collectAsState()
 
-    val activeClipAndAsset = remember(playheadFrame, timelineUiState.project.mediaAssets) {
-        timelineViewModel.getActiveVideoClipAndAsset()
-    }
-    val isProxyActive = activeClipAndAsset?.second?.proxyStatus == com.example.timeline.media.ProxyStatus.READY
+    val isProxyActive = activeAsset?.proxyStatus == com.example.timeline.media.ProxyStatus.READY
 
     var selectedTab by remember { mutableStateOf("Timeline") }
     var viewportWeight by remember { mutableFloatStateOf(0.4f) }
 
     Box(modifier = Modifier.fillMaxSize()) {
         Column(modifier = Modifier.fillMaxSize()) {
-            VideoViewportSection(
-            timelineUiState = timelineUiState,
-            timelineViewModel = timelineViewModel,
-            editorViewModel = editorViewModel,
-            timelinePreviewController = timelinePreviewController,
-            playheadFrame = playheadFrame,
-            isPlaying = isPlaying,
-            isSampling = isSampling,
-            onColorSampled = { r, g, b -> colorAdjustmentViewModel.applyEyedropperColor(r, g, b) },
-            onRelinkRequest = onRelinkRequest,
-            modifier = Modifier.weight(viewportWeight)
-        )
+            PlaybackAwareVideoViewport(
+                timelineUiState = timelineUiState,
+                timelineViewModel = timelineViewModel,
+                editorViewModel = editorViewModel,
+                timelinePreviewController = timelinePreviewController,
+                isPlaying = isPlaying,
+                isSampling = isSampling,
+                onColorSampled = { r, g, b -> colorAdjustmentViewModel.applyEyedropperColor(r, g, b) },
+                onRelinkRequest = onRelinkRequest,
+                modifier = Modifier.weight(viewportWeight)
+            )
         
         Box(
             modifier = Modifier
@@ -131,4 +127,32 @@ fun EditorScreen(
             )
         }
     }
+}
+
+/** Collects the 30 fps playhead only inside the viewport subtree, not the editor shell. */
+@Composable
+private fun PlaybackAwareVideoViewport(
+    timelineUiState: com.example.timeline.ui.TimelineUiState,
+    timelineViewModel: TimelineViewModel,
+    editorViewModel: EditorViewModel,
+    timelinePreviewController: TimelinePreviewController,
+    isPlaying: Boolean,
+    isSampling: Boolean,
+    onColorSampled: (Float, Float, Float) -> Unit,
+    onRelinkRequest: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val playheadFrame by editorViewModel.playheadFrame.collectAsState()
+    VideoViewportSection(
+        timelineUiState = timelineUiState,
+        timelineViewModel = timelineViewModel,
+        editorViewModel = editorViewModel,
+        timelinePreviewController = timelinePreviewController,
+        playheadFrame = playheadFrame,
+        isPlaying = isPlaying,
+        isSampling = isSampling,
+        onColorSampled = onColorSampled,
+        onRelinkRequest = onRelinkRequest,
+        modifier = modifier
+    )
 }

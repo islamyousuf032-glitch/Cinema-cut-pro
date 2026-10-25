@@ -22,8 +22,6 @@ fun TimelineScreen(viewModel: TimelineViewModel, editorViewModel: com.example.ui
     val uiState by viewModel.uiState.collectAsState()
     val proxyProgress by viewModel.proxyProgress.collectAsState()
     val isPlaying by viewModel.isPlaying.collectAsState()
-    
-    val playheadState = editorViewModel.playheadFrame.collectAsState()
 
     val launchers = rememberMediaImportLaunchers(
         onUrisPicked = { uris -> viewModel.handlePickedUris(uris) }
@@ -69,7 +67,7 @@ fun TimelineScreen(viewModel: TimelineViewModel, editorViewModel: com.example.ui
             CineTimelineCanvas(
                 onImportClick = onImportClick,
                 uiState = uiState,
-                playheadFrame = playheadState.value,
+                playheadFrameFlow = editorViewModel.playheadFrame,
                 isPlaying = isPlaying,
                 modifier = Modifier.fillMaxSize(),
                 onClipSelected = { viewModel.selectClip(it) },

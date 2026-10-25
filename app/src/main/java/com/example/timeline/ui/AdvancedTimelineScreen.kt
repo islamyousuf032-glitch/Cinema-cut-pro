@@ -46,7 +46,7 @@ fun AdvancedTimelineScreen(
     val miniViewportController = remember { MiniViewportController() }
     val density = androidx.compose.ui.platform.LocalDensity.current.density
 
-    val playheadFrame by editorViewModel.playheadFrame.collectAsState()
+    val playheadFrameFlow = editorViewModel.playheadFrame
     val isPlaying by timelineViewModel.isPlaying.collectAsState()
 
     Surface(
@@ -56,7 +56,7 @@ fun AdvancedTimelineScreen(
         Column(modifier = Modifier.fillMaxSize()) {
             AdvancedTimelineTopBar(
                 projectName = uiState.project.name,
-                playheadFrame = playheadFrame,
+                playheadFrameFlow = playheadFrameFlow,
                 onClose = onClose,
                 onUndo = { timelineViewModel.undo() },
                 onRedo = { timelineViewModel.redo() },
@@ -82,7 +82,7 @@ fun AdvancedTimelineScreen(
                 Box(modifier = Modifier.weight(1f)) {
                     AdvancedTimelineCanvas(
                         uiState = uiState,
-                        playheadFrame = playheadFrame,
+                        playheadFrameFlow = playheadFrameFlow,
                         isPlaying = isPlaying,
                         activeTool = activeTool,
                         snapEnabled = snapEnabled,
@@ -127,7 +127,7 @@ fun AdvancedTimelineScreen(
                                 timelineViewModel = timelineViewModel,
                                 editorViewModel = editorViewModel,
                                 timelinePreviewController = timelinePreviewController,
-                                playheadFrame = playheadFrame,
+                                playheadFrameFlow = playheadFrameFlow,
                                 isPlaying = isPlaying,
                                 onRelinkRequest = onRelinkRequest,
                                 onClose = { showMiniViewport = false }

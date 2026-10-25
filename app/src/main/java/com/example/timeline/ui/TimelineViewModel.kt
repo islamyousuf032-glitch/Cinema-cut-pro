@@ -74,6 +74,7 @@ class TimelineViewModel(context: Context) : ViewModel() {
 
     private val _playheadFrame = MutableStateFlow(0L)
     val playheadFrame: StateFlow<Long> = _playheadFrame.asStateFlow()
+    private var lastPlaybackUiPlayheadPublishMs = -1L
 
     private val _isPlaying = MutableStateFlow(false)
     val isPlaying: StateFlow<Boolean> = _isPlaying.asStateFlow()
@@ -705,7 +706,17 @@ class TimelineViewModel(context: Context) : ViewModel() {
         }
     }
     
+    /** Publishes a sampled position to non-viewport panels while the player itself stays frame-accurate. */
+    fun setPlaybackPlayheadFrame(frame: Long) {
+        val nowMs = android.os.SystemClock.elapsedRealtime()
+        if (shouldPublishPlaybackPlayhead(lastPlaybackUiPlayheadPublishMs, nowMs)) {
+            lastPlaybackUiPlayheadPublishMs = nowMs
+            _playheadFrame.value = frame.coerceAtLeast(0L)
+        }
+    }
+
     fun setPlayheadFrame(frame: Long) {
+        lastPlaybackUiPlayheadPublishMs = -1L
         _playheadFrame.value = frame
     }
     

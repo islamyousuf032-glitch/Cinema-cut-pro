@@ -51,7 +51,6 @@ fun ChromaProApp(viewModel: MainViewModel = viewModel()) {
         }
     )
     val timelineUiState by timelineViewModel.uiState.collectAsState()
-    val playheadFrame by timelineViewModel.playheadFrame.collectAsState()
     val isPlaying by timelineViewModel.isPlaying.collectAsState()
     val colorAdjustmentViewModel: com.example.ui.ColorAdjustmentViewModel = viewModel(
         factory = object : androidx.lifecycle.ViewModelProvider.Factory {
@@ -77,19 +76,28 @@ fun ChromaProApp(viewModel: MainViewModel = viewModel()) {
     val editorViewModel: com.example.ui.editor.EditorViewModel = viewModel()
     
     val timelinePreviewController = remember { com.example.timeline.engine.preview.TimelinePreviewController(context) }
-    val previewActiveClip by timelinePreviewController.activeClip.collectAsState()
+    val previewActiveAsset by timelinePreviewController.activeAsset.collectAsState()
     
     androidx.compose.runtime.DisposableEffect(timelinePreviewController) {
         timelinePreviewController.onPlayheadAdvanced = { newFrame ->
+            // Keep the preview/timeline cursor frame-accurate, while sampling legacy inspector
+            // panels so they do not trigger a full panel recomposition for every decoded frame.
             editorViewModel.updatePlayheadFrame(newFrame)
-            timelineViewModel.setPlayheadFrame(newFrame)
+            timelineViewModel.setPlaybackPlayheadFrame(newFrame)
         }
         onDispose {
             timelinePreviewController.onPlayheadAdvanced = null
             timelinePreviewController.release()
         }
     }
-    
+
+    LaunchedEffect(isPlaying, editorViewModel, timelineViewModel) {
+        if (!isPlaying) {
+            // Reconcile the exact paused frame once, including while the advanced timeline is open.
+            timelineViewModel.setPlayheadFrame(editorViewModel.playheadFrame.value)
+        }
+    }
+
 
     val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner, timelinePreviewController, timelineViewModel) {
@@ -133,13 +141,17 @@ fun ChromaProApp(viewModel: MainViewModel = viewModel()) {
 
     var showExportDialog by remember { mutableStateOf(false) }
 
-    LaunchedEffect(showScopes) {
+    LaunchedEffect(showScopes, timelinePreviewController, timelineViewModel) {
         if (showScopes) {
-            androidx.compose.runtime.snapshotFlow {
+            kotlinx.coroutines.flow.combine(
+                timelineViewModel.uiState,
+                timelineViewModel.playheadFrame,
+                timelinePreviewController.activeClip
+            ) { state, frame, clip ->
                 ScopeAnalysisRequest(
-                    project = timelineUiState.project,
-                    playheadFrame = playheadFrame,
-                    clipId = previewActiveClip?.id ?: timelineUiState.selectedClipId
+                    project = state.project,
+                    playheadFrame = frame,
+                    clipId = clip?.id ?: state.selectedClipId
                 )
             }
                 .sample(100L)
@@ -158,10 +170,7 @@ fun ChromaProApp(viewModel: MainViewModel = viewModel()) {
         }
     }
 
-    val activeClipAndAsset = remember(playheadFrame, timelineUiState.project.mediaAssets) {
-        timelineViewModel.getActiveVideoClipAndAsset()
-    }
-    val isProxyActive = activeClipAndAsset?.second?.proxyStatus == com.example.timeline.media.ProxyStatus.READY
+    val isProxyActive = previewActiveAsset?.proxyStatus == com.example.timeline.media.ProxyStatus.READY
 
     var lutSizeToBake by remember { mutableStateOf(33) }
     
@@ -289,7 +298,7 @@ fun ChromaProApp(viewModel: MainViewModel = viewModel()) {
                 com.example.ui.DebugPanel(
                     assets = timelineUiState.project.mediaAssets,
                     clipsCount = timelineUiState.project.tracks.sumOf { it.clips.size },
-                    playheadFrame = playheadFrame,
+                    playheadFrame = timelineViewModel.playheadFrame.value,
                     diagnostics = diagnostics,
                     onTestVlc = { path -> smokeTestVideoPath = path }
                 )
@@ -334,7 +343,7 @@ fun ChromaProApp(viewModel: MainViewModel = viewModel()) {
                 },
                 onOpenAdvancedTimeline = { 
                     com.example.timeline.core.ActiveProjectManager.activeProject = timelineUiState.project
-                    com.example.timeline.core.ActiveProjectManager.playheadFrame = playheadFrame
+                    com.example.timeline.core.ActiveProjectManager.playheadFrame = timelineViewModel.playheadFrame.value
                     com.example.timeline.core.ActiveProjectManager.selectedClipId = timelineUiState.selectedClipId
                     com.example.timeline.core.ActiveProjectManager.isDirty = false
                     

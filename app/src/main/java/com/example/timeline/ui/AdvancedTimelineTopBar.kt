@@ -13,19 +13,22 @@ import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.flow.StateFlow
 
 @Composable
 fun AdvancedTimelineTopBar(
     rippleAllTracks: Boolean,
     onToggleRippleAllTracks: () -> Unit,
     projectName: String,
-    playheadFrame: Long,
+    playheadFrameFlow: StateFlow<Long>,
     onClose: () -> Unit,
     onUndo: () -> Unit,
     onRedo: () -> Unit,
@@ -57,16 +60,8 @@ fun AdvancedTimelineTopBar(
             
             Spacer(modifier = Modifier.width(24.dp))
             
-            // Timecode
-            Text(
-                text = TimecodeFormatter.formatTimecode(playheadFrame, com.example.timeline.core.Rational(30, 1)), // assuming 30 fps for now
-                color = Color(0xFF00FF00),
-                fontSize = 14.sp,
-                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                modifier = Modifier
-                    .background(Color.Black, shape = MaterialTheme.shapes.small)
-                    .padding(horizontal = 8.dp, vertical = 4.dp)
-            )
+            // The timecode alone subscribes to live playback position.
+            AdvancedTimelineTimecode(playheadFrameFlow)
 
             Spacer(modifier = Modifier.weight(1f))
 
@@ -97,4 +92,18 @@ fun AdvancedTimelineTopBar(
             }
         }
     }
+}
+
+@Composable
+private fun AdvancedTimelineTimecode(playheadFrameFlow: StateFlow<Long>) {
+    val playheadFrame by playheadFrameFlow.collectAsState()
+    Text(
+        text = TimecodeFormatter.formatTimecode(playheadFrame, com.example.timeline.core.Rational(30, 1)),
+        color = Color(0xFF00FF00),
+        fontSize = 14.sp,
+        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+        modifier = Modifier
+            .background(Color.Black, shape = MaterialTheme.shapes.small)
+            .padding(horizontal = 8.dp, vertical = 4.dp)
+    )
 }
